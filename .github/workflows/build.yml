@@ -63,30 +63,36 @@ jobs:
           context: images
           target: ${{ matrix.image }}
           platforms: linux/${{ matrix.arch }}
-          outputs: type=oci,name=ci-${{ matrix.image }}:test,dest=${{ runner.temp }}/image.tar,rewrite-timestamp=true
+          outputs: type=docker,name=ci-${{ matrix.image }}:test,rewrite-timestamp=true
           build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
           provenance: false
           sbom: false
           cache-from: type=gha,scope=ci-${{ matrix.image }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=ci-${{ matrix.image }}-${{ matrix.arch }}
-      - name: Load the image
-        run: |
-          set -euo pipefail
-          docker load -i "$RUNNER_TEMP/image.tar" | tee "$RUNNER_TEMP/load.txt"
-          ref=$(sed -n 's/^Loaded image\(\( ID\)\?\): //p' "$RUNNER_TEMP/load.txt" | head -n 1)
-          docker tag "$ref" ci-${{ matrix.image }}:test
-          echo "manifest digest: $(bash images/oci-digest.sh "$RUNNER_TEMP/image.tar")"
       - name: Smoke test (root)
         run: docker run --rm --network none -v "$PWD/images/smoke.sh:/smoke.sh:ro" ci-${{ matrix.image }}:test bash /smoke.sh ${{ matrix.image }}
       - name: Smoke test (uid 1001)
         run: docker run --rm --network none --user 1001:1001 -e HOME=/tmp -v "$PWD/images/smoke.sh:/smoke.sh:ro" ci-${{ matrix.image }}:test bash /smoke.sh ${{ matrix.image }}
-      # The layers' sizes in the OCI archive are what a pull transfers.
+      # The same image again as an OCI archive (from the build cache, so it is
+      # quick): the layers' sizes there are what a pull transfers, and its
+      # manifest digest is what the registry will hold.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: images
+          target: ${{ matrix.image }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar,rewrite-timestamp=true
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=ci-${{ matrix.image }}-${{ matrix.arch }}
       - name: Image size
         run: |
           set -euo pipefail
           compressed=$(bash images/oci-size.sh "$RUNNER_TEMP/image.tar")
           uncompressed=$(docker image inspect ci-${{ matrix.image }}:test --format '{{.Size}}')
           echo "ci-${{ matrix.image }} linux/${{ matrix.arch }}: $((compressed / 1000000)) MB compressed ($compressed bytes), $((uncompressed / 1000000)) MB uncompressed" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "manifest digest: $(bash images/oci-digest.sh "$RUNNER_TEMP/image.tar")"
       # The reproducibility check: the same image twice, each build with no
       # cache (not the registry's, not the first build's), so every step runs
       # again. The OCI manifest digest of the two exports must be the same.
