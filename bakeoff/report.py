@@ -130,10 +130,9 @@ def main():
         if r is None:
             return "not checked (a Dockerfile build; no rebuild was compared)" if b else "n/a"
         what = "yes" if r.get("bit_identical") else "no"
-        rc = r.get("rebuild_exit", {})
-        return (f"{what} (nix build --rebuild of image/env/runner: exit {rc.get('image')}/{rc.get('env')}/{rc.get('iai_callgrind_runner')}; "
-                f"re-exported manifest digest {'equal' if r.get('manifest_identical') else 'different'}, "
-                f"layer digests {'equal' if r.get('layers_identical') else 'different'})")
+        return (f"{what} ({r.get('rechecked_derivations')} derivations built on the runner re-checked with nix-store --realise --check, "
+                f"{r.get('differing_derivations')} differ; image exported again: manifest digest "
+                f"{'equal' if r.get('manifest_identical') else 'different'}, layer digests {'equal' if r.get('layers_identical') else 'different'})")
 
     def scanner(v):
         if v == "vm":
@@ -175,7 +174,10 @@ def main():
                     ("vulnix: without a CVSS v3 score", str(x["unscored"])), ("vulnix: packages affected", str(x["packages_affected"]))]
         r = b.get("repro") or {}
         if r:
-            out += [("First manifest digest", f"`{r.get('first_manifest_digest')}`"), ("Second manifest digest", f"`{r.get('second_manifest_digest')}`")]
+            out += [("Re-checked derivations", ", ".join(d.replace(" ", ": ") for d in r.get("derivations", []))),
+                    ("Manifest digest, first export", f"`{r.get('first_manifest_digest')}`"),
+                    ("Manifest digest, export after the re-check", f"`{r.get('second_manifest_digest')}`"),
+                    ("Manifest digest as pushed", f"`{r.get('pushed_manifest_digest')}`" + ("" if r.get("first_export_equals_pushed") else " (differs from the exports: the registry copy may be in another manifest form)"))]
         return out
 
     def rows(v):

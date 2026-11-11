@@ -60,13 +60,15 @@ the others. `nix develop` in `bakeoff/nix` gives the same tools locally.
   (`skopeo-nix2container`) is built apart and timed apart, as `docker push` is
   not in the Dockerfile builds' time. `RESULTS.md` quotes Nix's own "will be
   built / will be fetched" line.
-- **Reproducibility.** `nix build --rebuild` builds the image's derivation, the
-  environment and the iai-callgrind-runner again and fails if an output differs;
-  then the image is exported again (`skopeo copy` to a directory) and its manifest
-  digest is compared with the one pushed. Only the Nix-built parts can be rebuilt
-  here: the packages substituted from `cache.nixos.org` are trusted as built there.
-  The Dockerfile variants were not checked (they pull packages and write
-  timestamps, so they are not expected to be bit-identical).
+- **Reproducibility.** `nix-store --realise --check` builds each derivation that
+  the runner builds (the layer metadata, the image's JSON, the environment, the
+  skeleton, the iai-callgrind-runner) again and fails if the output differs. The
+  image is exported (`skopeo copy` to a directory, layers compressed) before and
+  after, and the two manifest digests and layer digests are compared. Only the
+  Nix-built parts can be rebuilt here: the packages substituted from
+  `cache.nixos.org` are trusted as built there. The Dockerfile variants were
+  not checked (they pull packages and write timestamps, so they are not expected
+  to be bit-identical).
 - **CVEs.** Trivy runs on the image as on the others, but it reads package
   databases (dpkg, apk) and language lockfiles, not Nix store paths, so its result
   is recorded and marked not meaningful. The number that counts is

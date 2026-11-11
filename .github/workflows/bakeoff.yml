@@ -238,36 +238,46 @@ jobs:
               push_tool_build_seconds: $tool_seconds, layers: $layers, nix_plan: $plan}' > out/build.json
           cat out/build.json
 
-      # Reproducibility: `nix build --rebuild` builds the derivation again and
-      # fails if the output differs from the one in the store. That is done
-      # for the image's own derivation, the environment and the
-      # iai-callgrind-runner (a real cargo build). Then the image is exported
-      # again, from the rebuilt derivations, and its manifest digest and layer
-      # digests are compared with what was pushed.
+      # Reproducibility: `nix-store --realise --check` builds a derivation again
+      # and fails if its output differs from the one in the store. That is done
+      # for every derivation of the flake that is built on the runner (the
+      # layer metadata, the image's JSON, the environment, the skeleton and the
+      # iai-callgrind-runner, a real cargo build); the packages substituted
+      # from cache.nixos.org are not rebuilt (that would be building glibc and
+      # gcc). The image is exported (the
+      # layers compressed, to a directory) before and after, and the manifest
+      # digests and layer digests of the two exports are compared; the first
+      # export is also compared with what was pushed.
       - name: Rebuild and compare
         run: |
           # Not -e: a failed rebuild is a result, not an error.
           set +e -uo pipefail
-          rebuild() { # name, attribute
-            if nix build "$FLAKE#$2" --rebuild --no-link --print-build-logs > "out/rebuild-$1.log" 2>&1; then echo 0; else echo 1; fi
+          export_image() { # directory
+            rm -rf "$1"
+            nix run "$FLAKE#bench-image.copyTo" -- "dir:$1" --dest-compress > "out/export-$(basename "$1").log" 2>&1
+            echo "sha256:$(sha256sum "$1/manifest.json" | cut -d' ' -f1)"
           }
-          image_rc=$(rebuild image bench-image)
-          env_rc=$(rebuild env bench-env)
-          runner_rc=$(rebuild runner iai-callgrind-runner)
-          for f in out/rebuild-*.log; do echo "== $f"; tail -n 3 "$f"; done
-          rm -rf rb
-          nix run "$FLAKE#bench-image.copyTo" -- "dir:$PWD/rb" > out/rebuild-export.log 2>&1 || true
-          second=sha256:$(sha256sum rb/manifest.json 2>/dev/null | cut -d' ' -f1)
-          manifest_same=false; [ "$second" = "$DIGEST" ] && manifest_same=true
+          first=$(export_image "$PWD/export1")
+          checked=0; failed=0; : > out/rebuilt.txt
+          drv=$(nix path-info --derivation "$FLAKE#bench-image")
+          for d in $(nix-store --query --requisites "$drv" | grep -E -- '-(layers\.json|closure-graph\.json|image-ci-bakeoff\.json|skeleton|dir|bench-env|iai-callgrind-runner-0\.16\.1)\.drv$'); do
+            if nix-store --realise --check "$d" > "out/check-$(basename "$d").log" 2>&1; then r=identical; else r=DIFFERS; failed=$((failed + 1)); fi
+            checked=$((checked + 1)); echo "$r $(basename "$d")" | tee -a out/rebuilt.txt
+          done
+          second=$(export_image "$PWD/export2")
+          manifest_same=false; [ "$second" = "$first" ] && manifest_same=true
           layers_same=false
-          [ -f rb/manifest.json ] && [ "$(jq -c '[.layers[].digest]' rb/manifest.json)" = "$(jq -c '[.layers[].digest]' manifest.json)" ] && layers_same=true
+          [ "$(jq -c '[.layers[].digest]' export1/manifest.json)" = "$(jq -c '[.layers[].digest]' export2/manifest.json)" ] && layers_same=true
+          pushed_same=false; [ "$first" = "$DIGEST" ] && pushed_same=true
           identical=false
-          [ "$image_rc" = 0 ] && [ "$env_rc" = 0 ] && [ "$runner_rc" = 0 ] && [ "$manifest_same" = true ] && identical=true
-          jq -n --argjson image "$image_rc" --argjson env "$env_rc" --argjson runner "$runner_rc" \
-            --arg first "$DIGEST" --arg second "$second" \
+          [ "$checked" -gt 0 ] && [ "$failed" = 0 ] && [ "$manifest_same" = true ] && identical=true
+          jq -n --argjson checked "$checked" --argjson failed "$failed" --rawfile list out/rebuilt.txt \
+            --arg first "$first" --arg second "$second" --arg pushed "$DIGEST" --argjson pushed_same "$pushed_same" \
             --argjson manifest_same "$manifest_same" --argjson layers_same "$layers_same" --argjson identical "$identical" \
-            '{rebuild_exit: {image: $image, env: $env, iai_callgrind_runner: $runner},
+            '{rechecked_derivations: $checked, differing_derivations: $failed,
+              derivations: ($list | split("\n") | map(select(length > 0))),
               first_manifest_digest: $first, second_manifest_digest: $second,
+              pushed_manifest_digest: $pushed, first_export_equals_pushed: $pushed_same,
               manifest_identical: $manifest_same, layers_identical: $layers_same, bit_identical: $identical}' > out/repro.json
           cat out/repro.json
           jq --slurpfile r out/repro.json '. + {repro: $r[0]}' out/build.json > out/build.tmp && mv out/build.tmp out/build.json
@@ -282,8 +292,9 @@ jobs:
           # Not -e: vulnix exits 2 when it finds something.
           set +e -uo pipefail
           env_path=$(nix build "$FLAKE#bench-env" --no-link --print-out-paths)
-          nix run "$FLAKE#vulnix" -- --version 2>&1 | head -1 | tee out/vulnix-version.txt
-          nix run "$FLAKE#vulnix" -- --closure --json "$env_path" > out/vulnix.json 2> out/vulnix.err
+          vulnix=$(nix build "$FLAKE#vulnix" --no-link --print-out-paths | head -n 1)/bin/vulnix
+          "$vulnix" --version 2>&1 | tail -n 1 | tee out/vulnix-version.txt
+          "$vulnix" --closure --json "$env_path" > out/vulnix.json 2> out/vulnix.err
           rc=$?
           echo "vulnix exit status: $rc (0: nothing found, 2: vulnerabilities found)"
           tail -5 out/vulnix.err
