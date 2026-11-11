@@ -31,7 +31,11 @@ check test -d "$(rustc +nightly --print sysroot)/lib/rustlib/src/rust/library"
 echo "== Tools"
 run valgrind --version
 [[ "$(valgrind --version)" == valgrind-3.22.* ]] || { echo "valgrind is not 3.22" >&2; exit 1; }
-run iai-callgrind-runner --version
+# The runner has no --version: with none it fails, but names its own.
+echo "+ iai-callgrind-runner --version"
+iai=$(iai-callgrind-runner --version 2>&1 || true)
+echo "$iai"
+[[ "$iai" == *"iai-callgrind-runner (0.16.1)"* ]] || { echo "iai-callgrind-runner is not 0.16.1" >&2; exit 1; }
 run cue version
 run wasm-bindgen --version
 run wasm-pack --version
