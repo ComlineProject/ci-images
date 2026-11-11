@@ -191,6 +191,7 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=sha,prefix=sha-,format=short
+            type=sha,prefix=sha-,format=long
             type=raw,value=latest
       - name: Create the manifest list
         working-directory: ${{ runner.temp }}/digests
@@ -246,7 +247,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/comlineproject/ci-bench:sha-${{ substr(github.sha, 0, 7) }}
+      image: ghcr.io/comlineproject/ci-bench:sha-${{ github.sha }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
