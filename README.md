@@ -23,7 +23,9 @@ says why Debian.
 ## Use it
 
 Pin the image by digest, never by tag. The digest of each build is in its
-[workflow run](../../actions/workflows/build.yml)'s summary.
+[workflow run](../../actions/workflows/build.yml)'s summary. The builds are
+reproducible ([`images/versions.md`](images/versions.md#reproducible-builds)): a
+digest changes only when an input of the image does.
 
 ```yaml
 jobs:

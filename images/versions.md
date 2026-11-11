@@ -57,6 +57,41 @@ Not in any image: Node (GitHub mounts its own into a job container for
 actions; a job that runs `node` in a step uses `actions/setup-node`), curl and
 unzip (only a build stage has curl), `pkg-config`, xz-utils.
 
+## Reproducible builds
+
+Building an unchanged image again gives the same digest, so a merge to `main`
+that touches no input publishes no new digest and Renovate opens no bump pull
+requests in the consuming repositories. A digest changes only when an input
+does:
+
+- **Base image**: `BASE_IMAGE`, by digest.
+- **apt packages**: `DEBIAN_SNAPSHOT`, one snapshot.debian.org date.
+- **Downloaded files**: every version `ARG`, each with its SHA-256 hash per
+  architecture, checked before use. The Rust toolchains are exact versions
+  (`RUST_STABLE`, `RUST_NIGHTLY`); cargo-fuzz and cbindgen are `--locked`.
+- **Timestamps**: `SOURCE_DATE_EPOCH` is the date of `DEBIAN_SNAPSHOT`
+  (`images/source-date-epoch.sh`), and every image is exported with BuildKit's
+  `rewrite-timestamp=true`, so no file or history entry carries the build's
+  clock. BuildKit itself is pinned by digest in `build.yml`, because the layers'
+  compression comes from it.
+- **Labels**: static. There is no `org.opencontainers.image.revision`; the
+  commit a digest was built from is in its build provenance attestation.
+- **Build leftovers**: what varies between two runs is not left in the image:
+  `/var/log`, `/var/cache/apt`, `/var/lib/apt/lists`, the ldconfig and debconf
+  caches, compiled Python (`*.pyc`), and what rustup and cargo downloaded
+  (`images/apt-install.sh`, `images/rustup.sh`).
+
+The `build` job of a pull request checks it: it builds each image twice, with no
+cache, exports both as OCI archives and fails if their manifest digests differ,
+printing the files that differ (`images/oci-diff.py`). On `main`, `publish`
+pushes each architecture by digest (the same manifest as before is no new
+push), and `merge and attest` leaves `:latest`, the index and the attestation
+alone when the per-architecture manifests are the ones `:latest` already has,
+and only adds the `sha-` tags to it.
+
+A change to any input above, to a script in `images/`, or to the Dockerfile, is a
+new digest, as it should be.
+
 ## Size
 
 From the first build (pull request #3, `Image size` step of each build job). The
