@@ -1,0 +1,190 @@
+name: build
+
+# Pull requests build the image for both architectures and smoke-test it; they
+# never push. Pushes to main, the weekly schedule (to pick up Ubuntu's package
+# updates) and manual runs also publish ghcr.io/comlineproject/ci-rust.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request supersedes its run; a publish is never cut short.
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/comlineproject/ci-rust
+
+jobs:
+  # Build each architecture natively, load it into the local daemon and run the
+  # smoke test: as root and as another uid, with no network.
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: rust
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: ci-rust:test
+          build-args: REVISION=${{ github.sha }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=ci-rust-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ci-rust-${{ matrix.arch }}
+      - name: Smoke test (root)
+        run: docker run --rm --network none -v "$PWD/rust/smoke.sh:/smoke.sh:ro" ci-rust:test bash /smoke.sh
+      - name: Smoke test (uid 1001)
+        run: docker run --rm --network none --user 1001:1001 -e HOME=/tmp -v "$PWD/rust/smoke.sh:/smoke.sh:ro" ci-rust:test bash /smoke.sh
+      - name: Image size
+        run: |
+          size=$(docker image inspect ci-rust:test --format '{{.Size}}')
+          echo "linux/${{ matrix.arch }}: $((size / 1000000)) MB uncompressed" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Push each architecture by digest, then smoke-test exactly what was pushed.
+  publish:
+    name: publish (${{ matrix.arch }})
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        id: build
+        with:
+          context: rust
+          platforms: linux/${{ matrix.arch }}
+          build-args: REVISION=${{ github.sha }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=ci-rust-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ci-rust-${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Smoke test the pushed image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker pull "$IMAGE@$DIGEST"
+          docker run --rm --network none -v "$PWD/rust/smoke.sh:/smoke.sh:ro" "$IMAGE@$DIGEST" bash /smoke.sh
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Join the two architectures into one manifest, tag it, and attest it.
+  merge:
+    name: merge and attest
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
+      - name: Create the manifest list
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$IMAGE@sha256:%s " *)
+      - name: Resolve the digest
+        id: digest
+        run: |
+          tag=$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          digest=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" == sha256:* ]] || { echo "no digest for $tag" >&2; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "## ci-rust"
+            echo
+            echo "Digest: \`$digest\`"
+            echo
+            echo "Tags: $(jq -r '.tags | map("\`" + . + "\`") | join(", ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+            echo
+            echo "Use it as:"
+            echo
+            echo '```yaml'
+            echo "container:"
+            echo "  image: $IMAGE@$digest"
+            echo '```'
+            echo
+            echo '```'
+            docker buildx imagetools inspect "$IMAGE@$digest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
