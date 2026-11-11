@@ -43,7 +43,8 @@ ARG CBINDGEN_VERSION=0.29.2
 # instruction-count baselines stay comparable with the hosted runner's.
 FROM ${UBUNTU_IMAGE} AS apt
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update \
+RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80retries \
+ && apt-get update -o APT::Update::Error-Mode=any \
  && apt-get install -y --no-install-recommends \
       binaryen build-essential ca-certificates curl git jq make musl-tools \
       pkg-config python3 unzip valgrind xz-utils zstd \
