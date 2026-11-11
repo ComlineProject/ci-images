@@ -292,9 +292,9 @@ jobs:
           # Not -e: vulnix exits 2 when it finds something.
           set +e -uo pipefail
           env_path=$(nix build "$FLAKE#bench-env" --no-link --print-out-paths)
-          vulnix=$(nix build "$FLAKE#vulnix" --no-link --print-out-paths | head -n 1)/bin/vulnix
-          "$vulnix" --version 2>&1 | tail -n 1 | tee out/vulnix-version.txt
-          "$vulnix" --closure --json "$env_path" > out/vulnix.json 2> out/vulnix.err
+          nix build "$FLAKE#vulnix" --no-link
+          nix run "$FLAKE#vulnix" -- --version 2>/dev/null | tail -n 1 | tee out/vulnix-version.txt
+          nix run "$FLAKE#vulnix" -- --closure --json "$env_path" > out/vulnix.json 2> out/vulnix.err
           rc=$?
           echo "vulnix exit status: $rc (0: nothing found, 2: vulnerabilities found)"
           tail -5 out/vulnix.err
