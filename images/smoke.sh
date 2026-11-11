@@ -62,7 +62,8 @@ fuzz)
   run cargo "+$CI_RUST_NIGHTLY" fuzz --version
   run cargo fuzz --version
   run gh --version
-  absent valgrind python3 wasm-pack cue cbindgen
+  run python3 --version
+  absent valgrind wasm-pack cue cbindgen
   # What cargo-fuzz asks of the compiler: a sanitizer runtime in the toolchain.
   work=$(mktemp -d); cd "$work"
   run cargo new --quiet --vcs none hello
@@ -73,13 +74,14 @@ wasm)
   echo "== wasm"
   [[ "$(rustc --version)" == "rustc $CI_RUST_STABLE "* ]] || fail "default rustc is not $CI_RUST_STABLE"
   installed_target wasm32-unknown-unknown
+  installed_target wasm32-wasip1
   run wasm-bindgen --version
   run wasm-pack --version
   run wasm-opt --version
   command -v wasm-bindgen-test-runner wasm2es6js
   run jq --version
   absent valgrind cargo-fuzz cue cbindgen gh
-  builds "" wasm32-unknown-unknown
+  builds "" wasm32-unknown-unknown wasm32-wasip1
   ;;
 tools)
   echo "== tools"
