@@ -27,7 +27,7 @@ specification.
 | wasm-bindgen-cli | 0.2.127 | release binary (musl) | Must equal `wasm-bindgen` in simulator's `Cargo.lock` (0.2.127). playground has no `Cargo.lock` (`wasm-bindgen = "0.2"` in `wasm/Cargo.toml`), and builds the simulator at the commit its `app/yarn.lock` pins; wasm-pack fetches its own matching wasm-bindgen if the one on `PATH` differs. Bump with simulator's lockfile. |
 | wasm-pack | 0.15.1 | release binary (musl) | Current. playground's `deploy.yml` installs the latest at job time. |
 | cue | v0.17.1 | release binary | `CUE_VERSION` in runtime's `build_test.yml` and specification's `check.yml`; runtime's `conformance/spec/cue.mod/module.cue` is kept in step with it. |
-| binaryen (`wasm-opt`) | Ubuntu 24.04's | apt | simulator's `ci.yml` and `reports.yml`, playground's `deploy.yml`. |
+| binaryen (`wasm-opt`) | Ubuntu 24.04's (version 108) | apt | simulator's `ci.yml` and `reports.yml`, playground's `deploy.yml`. |
 | musl-tools (`musl-gcc`) | Ubuntu 24.04's | apt | For the musl target. |
 | gh | 2.103.3 | release binary | The fuzz, nightly and CI workflows use `gh issue` and `gh api`, which a job container does not have. |
 | python3 | Ubuntu 24.04's | apt | `.github/scripts/bench-report.py` in the bench workflows. |
@@ -41,3 +41,9 @@ a job that runs `node` in a step uses `actions/setup-node`.
 | | Version | Why |
 |---|---|---|
 | ubuntu | 24.04 at `sha256:fe81560990fa...` | The multi-arch index digest, matching the hosted runners' release. Renovate bumps it. |
+
+## Size
+
+About 2.9 GB uncompressed on amd64 and 2.5 GB on arm64 (the two toolchains with
+their components and targets are most of it). A job pulls the compressed
+layers once per runner.
