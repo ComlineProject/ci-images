@@ -246,14 +246,15 @@ jobs:
       # digests are compared with what was pushed.
       - name: Rebuild and compare
         run: |
-          set -uo pipefail
+          # Not -e: a failed rebuild is a result, not an error.
+          set +e -uo pipefail
           rebuild() { # name, attribute
             if nix build "$FLAKE#$2" --rebuild --no-link --print-build-logs > "out/rebuild-$1.log" 2>&1; then echo 0; else echo 1; fi
           }
           image_rc=$(rebuild image bench-image)
           env_rc=$(rebuild env bench-env)
           runner_rc=$(rebuild runner iai-callgrind-runner)
-          tail -3 out/rebuild-*.log
+          for f in out/rebuild-*.log; do echo "== $f"; tail -n 3 "$f"; done
           rm -rf rb
           nix run "$FLAKE#bench-image.copyTo" -- "dir:$PWD/rb" > out/rebuild-export.log 2>&1 || true
           second=sha256:$(sha256sum rb/manifest.json 2>/dev/null | cut -d' ' -f1)
@@ -278,7 +279,8 @@ jobs:
       # CVSS v3 base score >= 7.0; vulnix has no fix information.
       - name: vulnix
         run: |
-          set -uo pipefail
+          # Not -e: vulnix exits 2 when it finds something.
+          set +e -uo pipefail
           env_path=$(nix build "$FLAKE#bench-env" --no-link --print-out-paths)
           nix run "$FLAKE#vulnix" -- --version 2>&1 | head -1 | tee out/vulnix-version.txt
           nix run "$FLAKE#vulnix" -- --closure --json "$env_path" > out/vulnix.json 2> out/vulnix.err
