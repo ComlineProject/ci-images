@@ -11,4 +11,11 @@ case $snapshot in
   *) echo "no DEBIAN_SNAPSHOT (YYYYMMDDTHHMMSSZ) in $dockerfile" >&2; exit 1 ;;
 esac
 iso=$(printf '%s' "$snapshot" | sed 's/^\(....\)\(..\)\(..\)T\(..\)\(..\)\(..\)Z$/\1-\2-\3 \4:\5:\6/')
-date -u -d "$iso" +%s
+epoch=$(date -u -d "$iso" +%s)
+# rewrite-timestamp only lowers mtimes: a file made before the epoch keeps the
+# time it was made at, and the digest then depends on the clock.
+if [ "$epoch" -gt "$(date -u +%s)" ]; then
+  echo "DEBIAN_SNAPSHOT $snapshot is in the future: builds would not be reproducible" >&2
+  exit 1
+fi
+echo "$epoch"

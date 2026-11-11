@@ -3,7 +3,8 @@
 
 Prints the manifest and config differences, then for every layer whose digest
 differs, each file that is only in one of the two, or differs in type, mode,
-owner, mtime, link target or content hash (at most --max per layer). Meant for
+owner, link target or content hash (at most --max per layer); files that
+differ only in mtime are counted, with a few examples. Meant for
 the log of a failed reproducibility check; it does not need either image to be
 loadable. Run it with `python3 -I`.
 """
@@ -80,8 +81,12 @@ def main():
         print(f"\nlayer {i}: {x['digest']} != {y['digest']} (sizes {x['size']}, {y['size']})")
         fa, fb = layer_files(ta, x["digest"]), layer_files(tb, y["digest"])
         shown = 0
+        mtime_only = []
         for name in sorted(set(fa) | set(fb)):
             if fa.get(name) == fb.get(name):
+                continue
+            if name in fa and name in fb and fa[name][:4] + fa[name][5:] == fb[name][:4] + fb[name][5:]:
+                mtime_only.append(name)
                 continue
             shown += 1
             if shown > args.max:
@@ -93,7 +98,11 @@ def main():
                 print(f"  only in A: {name}")
             else:
                 print(f"  {name}\n    A {fa[name]}\n    B {fb[name]}")
-        if shown == 0:
+        if mtime_only:
+            print(f"  {len(mtime_only)} files differ only in mtime, for example:")
+            for name in mtime_only[:5]:
+                print(f"    {name}: {fa[name][4]} != {fb[name][4]}")
+        if shown == 0 and not mtime_only:
             print("  same files and metadata: the difference is in the layer's encoding (tar or gzip)")
 
 
