@@ -42,8 +42,10 @@ RUN --mount=type=bind,source=rust/fetch.sh,target=/fetch.sh \
 FROM ${BASE_IMAGE} AS final
 USER root
 # python3 is provided by Wolfi's python-3.x package; build-base is gcc, binutils,
-# make, pkgconf and glibc-dev.
-RUN apk add --no-cache build-base ca-certificates-bundle gh git glibc python3 valgrind zstd
+# make, pkgconf and glibc-dev. setarch is its own package here (util-linux on
+# Ubuntu and Debian); iai-callgrind's runner uses it to switch ASLR off, and
+# without it runs with ASLR on, quietly.
+RUN apk add --no-cache build-base ca-certificates-bundle gh git glibc python3 setarch valgrind zstd
 COPY --from=fetch /out/iai-callgrind-runner /usr/local/bin/
 
 # CARGO_HOME and RUSTUP_HOME are outside any home directory and open to every

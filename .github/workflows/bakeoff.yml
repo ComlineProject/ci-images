@@ -203,7 +203,12 @@ jobs:
         run: |
           set -euo pipefail
           # Same paths in every variant: core at /work, bench.sh sets the rest.
-          docker run --rm \
+          # seccomp=unconfined: iai-callgrind's runner calls `setarch -R` to
+          # switch ASLR off, and Docker's default seccomp profile refuses the
+          # personality() call ("setarch: failed to set personality to x86_64:
+          # Operation not permitted") and fails the bench. The first run of
+          # this workflow failed there on ubuntu and debian.
+          docker run --rm --security-opt seccomp=unconfined \
             -v "$PWD/core-src:/work" -v "$PWD/bakeoff:/bakeoff:ro" \
             -v "$RUNNER_TEMP/out:/out" -v "$RUNNER_TEMP/iai:/tmp/iai" \
             -w /work "$IMAGE_REF" sh /bakeoff/bench.sh

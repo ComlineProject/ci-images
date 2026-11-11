@@ -139,6 +139,7 @@ def main():
             ("valgrind", env(v, "valgrind")),
             ("glibc", env(v, "glibc")),
             ("rustc", env(v, "rustc")),
+            ("setarch", env(v, "setarch")),
             ("CVEs HIGH+CRITICAL with a fix", "n/a" if cve(v, "high_critical_fixed") is None else str(cve(v, "high_critical_fixed"))),
             ("CVEs HIGH+CRITICAL, all", "n/a" if cve(v, "high_critical") is None else str(cve(v, "high_critical"))),
             ("CVEs total, all severities", "n/a" if cve(v, "total") is None else str(cve(v, "total"))),

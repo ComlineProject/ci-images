@@ -19,7 +19,7 @@ Each has: Rust stable 1.99.1, minimal profile, no extra components, no nightly
 so core's `rust-toolchain.toml` needs no download); `valgrind`; `iai-callgrind-runner`
 0.16.1 (the release binary, hash-checked); `python3`; `git`; `gh` 2.103.3
 (the release binary, hash-checked; on Wolfi, Wolfi's own package of the same
-version); `ca-certificates`; a C toolchain (`build-essential`, or `build-base`);
+version); `ca-certificates`; `setarch` (Wolfi only, see below); a C toolchain (`build-essential`, or `build-base`);
 `zstd`. Not in them: curl (a build stage downloads, only the files leave it),
 `jq`, `make` beyond the C toolchain, musl, wasm tools, nightly, cargo-fuzz,
 cbindgen, cue. amd64 only. Each Dockerfile ends with a smoke `RUN`
@@ -47,6 +47,17 @@ Wolfi.
   iai-callgrind's output go to `/tmp/target` and `/tmp/iai` in every variant,
   the VM leg too (bind mounts), so a bench binary's path, which can move
   counts, is the same everywhere.
+- **Seccomp.** iai-callgrind's runner runs the bench under `setarch -R` (ASLR
+  off). Docker's default seccomp profile refuses that `personality()` call, so
+  the bench fails in a container ("setarch: failed to set personality ...:
+  Operation not permitted"); `docker run` here uses
+  `--security-opt seccomp=unconfined`, and a job with `container:` needs
+  `options: --security-opt seccomp=unconfined` too. The first run of this workflow
+  passed on wolfi without the flag, which suggests `wolfi-base` has no `setarch`
+  and the runner then goes on with ASLR on, silently (inferred from the
+  absence of the error, not confirmed). So the wolfi variant installs Wolfi's
+  `setarch` package (on the other two it is util-linux's), and `RESULTS.md`
+  shows the path of `setarch` in each environment.
 - **Bench.** core at a fixed commit (`CORE_SHA` in the workflow). The command is
   the one of core's `bench.yml`, in its `master` job:
   `cargo bench -p comline-core --bench parser_instructions -- --save-summary=json`.

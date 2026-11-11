@@ -18,11 +18,12 @@ echo "gcc=$(first cc --version)"
 echo "python3=$(first python3 --version)"
 echo "git=$(first git --version)"
 echo "zstd=$(first zstd --version)"
+echo "setarch=$(command -v setarch || echo missing)"
 if command -v dpkg-query >/dev/null 2>&1; then
   dpkg-query -W -f 'pkg=${Package} ${Version}\n' \
     valgrind libc6 libc6-dbg gcc build-essential git python3 zstd ca-certificates 2>/dev/null || true
 elif command -v apk >/dev/null 2>&1; then
   apk list -I 2>/dev/null \
     | grep -E '^(valgrind|glibc|glibc-dev|gcc|build-base|git|gh|python-3[^ ]*|zstd|ca-certificates-bundle|binutils|make)-[0-9]' \
-    | sed 's/^/pkg=/' || true
+    | sed 's/ .*//; s/^/pkg=/' || true
 fi
