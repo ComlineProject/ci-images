@@ -47,8 +47,11 @@ The image is built with `nix2container` (layers are streamed, no tarball in the
 store; up to 100 layers, one per popular store path) and pushed with its skopeo.
 As a job container it has `/bin/sh`, `/usr/bin/env`, `PATH`, `SSL_CERT_FILE`,
 a world-writable `/tmp`, `HOME=/home/ci` and `CARGO_HOME=/cargo`, and
-glibc's loader at `/lib64/ld-linux-x86-64.so.2` so GitHub's mounted node can run
-(the `container-smoke` job runs it as a real `container:` job). `/lib64/libc.so.6`
+`/lib64/ld-linux-x86-64.so.2` provided by [nix-ld](https://github.com/nix-community/nix-ld)
+(`NIX_LD` is Nix's glibc, `NIX_LD_LIBRARY_PATH` has libstdc++ and libgcc_s), so GitHub's
+mounted node, a plain glibc binary that wants a libstdc++ the image does not otherwise put on
+a search path, can run (the `container-smoke` job runs the image as a real `container:` job;
+programs built by Nix do not go through nix-ld, so the bench is unaffected). `/lib64/libc.so.6`
 is there for `envinfo.sh`, which reports the glibc version the same way as in
 the others. `nix develop` in `bakeoff/nix` gives the same tools locally.
 
