@@ -10,7 +10,7 @@ specification. Why Debian: [`../docs/base-choice.md`](../docs/base-choice.md).
 |---|---|---|---|
 | `ci-bench` | the instruction-count benchmarks (core, runtime) | stable 1.99.1, minimal | valgrind, iai-callgrind-runner 0.16.1, python3, gh |
 | `ci-fuzz` | the cargo-fuzz jobs (core, runtime) | nightly-2026-11-10, minimal | cargo-fuzz 0.13.2, gh |
-| `ci-wasm` | the WebAssembly build (simulator, playground) | stable 1.99.1, minimal, `wasm32-unknown-unknown` | wasm-bindgen 0.2.127, wasm-pack 0.15.1, binaryen, jq |
+| `ci-wasm` | the WebAssembly build (simulator, playground), core's `ir_only` job | stable 1.99.1, minimal, `wasm32-unknown-unknown`, `wasm32-wasip1` | wasm-bindgen 0.2.127, wasm-pack 0.15.1, binaryen, jq |
 | `ci-tools` | cue, cbindgen and the musl build (runtime, specification) | stable 1.99.1, minimal, the musl target | cue v0.17.1, cbindgen 0.29.2, musl-tools, make, jq |
 
 All four have, from the base: git, ca-certificates, zstd (for `actions/cache`),
@@ -34,7 +34,7 @@ python3 3.13.5, git 2.47.3. The smoke test prints the rest.
 | stable toolchain | 1.99.1 | Current stable when the images were built (2026-11-12). Default toolchain, also reachable as `stable`, in `ci-bench`, `ci-wasm`, `ci-tools`. No components: `clippy`, `rustfmt`, `llvm-tools-preview` are not in these images (a job that needs one runs `rustup component add`, or a `rust-toolchain.toml` that names it does). runtime's `rust-toolchain.toml` pins 1.98.0 and core's says `stable`: bump runtime's to match, or it downloads 1.98.0 at job time. |
 | nightly toolchain | nightly-2026-11-10 | cargo-fuzz needs nightly (core and runtime `fuzz.yml`). Dated, so the image does not move under the jobs; default in `ci-fuzz`, also reachable as `nightly`. No components: `cargo fuzz build` and `run` need only the sanitizer runtime that comes with the toolchain's `rust-std`, not `rust-src` or `llvm-tools-preview` (those are for `cargo fuzz coverage` and `--build-std`). `stable` is not in `ci-fuzz`. |
 | beta, 1.82.0, miri | not included | Moving or one-off toolchains (the `beta` leg of the toolchain matrix, specification's MSRV check, runtime's `ffi_miri` job) are installed by the job: `rustup toolchain install beta --profile minimal`. |
-| targets | `wasm32-unknown-unknown` in `ci-wasm`; `x86_64-unknown-linux-musl` (`aarch64-...` on arm64) in `ci-tools` | `wasm32-wasip1` is not included (no job uses it). |
+| targets | `wasm32-unknown-unknown` and `wasm32-wasip1` in `ci-wasm`; `x86_64-unknown-linux-musl` (`aarch64-...` on arm64) in `ci-tools` | `wasm32-unknown-unknown` is the browser build (simulator, playground). `wasm32-wasip1` is for core's `ir_only` job (`build_test.yml`), which runs `cargo build -p comline-core --no-default-features --target wasm32-wasip1` (and the same for `wasm32-unknown-unknown`): the IR without a parser must compile for WASI. Both are `rust-std` only, no runtime (wasmtime, wasmer) is in the image, so it builds for WASI but cannot run the result. |
 
 ## Tools
 

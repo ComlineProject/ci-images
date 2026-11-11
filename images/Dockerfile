@@ -4,7 +4,7 @@
 #
 #   bench  Rust stable, valgrind, iai-callgrind-runner, python3, gh
 #   fuzz   Rust nightly, cargo-fuzz, gh
-#   wasm   Rust stable + wasm32, wasm-bindgen, wasm-pack, binaryen
+#   wasm   Rust stable + wasm32 (browser and WASI), wasm-bindgen, wasm-pack, binaryen
 #   tools  Rust stable + musl, cue, cbindgen, musl-tools, make, jq
 #
 #   docker build --target bench images
@@ -230,13 +230,13 @@ RUN --mount=type=bind,source=apt-install.sh,target=/apt-install.sh \
 RUN --mount=type=bind,source=arch.sh,target=/arch.sh \
     --mount=type=bind,source=rustup.sh,target=/rustup.sh \
     --mount=type=bind,from=dl-rustup,source=/out,target=/dl \
-    sh /rustup.sh "$RUST_STABLE" stable -t wasm32-unknown-unknown
+    sh /rustup.sh "$RUST_STABLE" stable -t wasm32-unknown-unknown -t wasm32-wasip1
 COPY --from=dl-wasm /out/ /usr/local/bin/
 ENV CI_RUST_STABLE=${RUST_STABLE}
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/ComlineProject/ci-images" \
       org.opencontainers.image.revision="${REVISION}" \
-      org.opencontainers.image.description="ComlineProject CI: Rust stable with wasm32, wasm-bindgen, wasm-pack and binaryen (see images/versions.md)"
+      org.opencontainers.image.description="ComlineProject CI: Rust stable with wasm32 (unknown and wasip1), wasm-bindgen, wasm-pack and binaryen (see images/versions.md)"
 
 
 # ---------------------------------------------------------------------------

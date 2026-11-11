@@ -73,13 +73,14 @@ wasm)
   echo "== wasm"
   [[ "$(rustc --version)" == "rustc $CI_RUST_STABLE "* ]] || fail "default rustc is not $CI_RUST_STABLE"
   installed_target wasm32-unknown-unknown
+  installed_target wasm32-wasip1
   run wasm-bindgen --version
   run wasm-pack --version
   run wasm-opt --version
   command -v wasm-bindgen-test-runner wasm2es6js
   run jq --version
   absent valgrind cargo-fuzz cue cbindgen gh
-  builds "" wasm32-unknown-unknown
+  builds "" wasm32-unknown-unknown wasm32-wasip1
   ;;
 tools)
   echo "== tools"
