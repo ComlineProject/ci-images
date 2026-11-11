@@ -80,6 +80,10 @@ wasm)
   run wasm-opt --version
   command -v wasm-bindgen-test-runner wasm2es6js
   run jq --version
+  run clang --version
+  # What `cc` asks of clang for a crate with C sources: compile for wasm32.
+  printf 'int add(int a, int b) { return a + b; }\n' > /tmp/add.c
+  run clang --target=wasm32-unknown-unknown -O2 -c /tmp/add.c -o /tmp/add.o
   absent valgrind cargo-fuzz cue cbindgen gh
   builds "" wasm32-unknown-unknown wasm32-wasip1
   ;;

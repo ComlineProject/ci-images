@@ -228,8 +228,11 @@ LABEL org.opencontainers.image.source="https://github.com/ComlineProject/ci-imag
 FROM rust-base AS wasm
 ARG TARGETARCH
 ARG RUST_STABLE
+# clang: crates with C sources (tree-sitter, psm via stacker) compile that C
+# for wasm32 through `cc`, and gcc cannot target wasm. core, built for wasm32
+# by language-server's analysis lib, pulls both in.
 RUN --mount=type=bind,source=apt-install.sh,target=/apt-install.sh \
-    sh /apt-install.sh binaryen jq
+    sh /apt-install.sh binaryen jq clang
 RUN --mount=type=bind,source=arch.sh,target=/arch.sh \
     --mount=type=bind,source=rustup.sh,target=/rustup.sh \
     --mount=type=bind,from=dl-rustup,source=/out,target=/dl \
