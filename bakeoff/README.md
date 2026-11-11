@@ -1,7 +1,7 @@
 # Base-image bake-off
 
 Is a different base faster or smaller than Ubuntu 24.04 for the bench image?
-Three variants with the same tools, measured on GitHub-hosted runners (nothing
+Four variants with the same tools, measured on GitHub-hosted runners (nothing
 is built or measured locally). [`RESULTS.md`](RESULTS.md) holds the numbers of
 the last run; the workflow is
 [`bakeoff.yml`](../.github/workflows/bakeoff.yml).
@@ -13,8 +13,9 @@ the last run; the workflow is
 | [`ubuntu`](ubuntu/Dockerfile) | `ubuntu:24.04@sha256:fe8156...` (what `ci-rust` uses) | apt |
 | [`debian`](debian/Dockerfile) | `debian:trixie-slim@sha256:a72b44...` | apt |
 | [`wolfi`](wolfi/Dockerfile) | `cgr.dev/chainguard/wolfi-base@sha256:94fa13...` (`latest` on 2026-11-12) | apk (Wolfi, glibc) |
+| [`nix`](nix/flake.nix) | no base image: the image is only the closure of its packages (`nixos-26.05`, pinned in [`flake.lock`](nix/flake.lock)) | Nix (nixpkgs; Rust from rust-overlay) |
 
-Each has: Rust stable 1.99.1, minimal profile, no extra components, no nightly
+Each Dockerfile variant has: Rust stable 1.99.1, minimal profile, no extra components, no nightly
 (rustup 1.29.3, hash-checked, as in `rust/Dockerfile`; `stable` is linked to it
 so core's `rust-toolchain.toml` needs no download); `valgrind`; `iai-callgrind-runner`
 0.16.1 (the release binary, hash-checked); `python3`; `git`; `gh` 2.103.3
@@ -25,6 +26,55 @@ version); `ca-certificates`; `setarch` (Wolfi only, see below); a C toolchain (`
 cbindgen, cue. amd64 only. Each Dockerfile ends with a smoke `RUN`
 (`valgrind --version`, `iai-callgrind-runner --version`, `cargo --version`,
 `gh --version`, and a few more).
+
+### The nix variant
+
+[`nix/flake.nix`](nix/flake.nix) and [`nix/flake.lock`](nix/flake.lock) (nixpkgs
+`nixos-26.05`, `oxalica/rust-overlay` and `nlewo/nix2container`, each locked by rev
+and narHash; the lock was generated in Actions, nothing is built locally).
+It has the same tools: Rust 1.99.1, minimal profile (rust-overlay, no rustup:
+`cargo` and `rustc` are the toolchain, so `rust-toolchain.toml` is not
+consulted), `valgrind`, `python3`, `git`, `gh`, `cc` (nixpkgs' gcc wrapper),
+`make`, `zstd`, `setarch` (util-linux), `ca-certificates`, glibc. The versions
+are nixpkgs' (`RESULTS.md` has them), not the Dockerfile variants' pins;
+`iai-callgrind-runner` 0.16.1 is built from the crates.io source with
+`rustPlatform.buildRustPackage` (nixpkgs does not package it; the source hash
+and the vendored-dependencies hash are in the flake). Beyond the others' tool
+set it has a shell and the usual text tools (`bash`, coreutils, `tar`, `gzip`,
+grep, sed, awk, find), which a job container needs.
+
+The image is built with `nix2container` (layers are streamed, no tarball in the
+store; up to 100 layers, one per popular store path) and pushed with its skopeo.
+As a job container it has `/bin/sh`, `/usr/bin/env`, `PATH`, `SSL_CERT_FILE`,
+a world-writable `/tmp`, `HOME=/home/ci` and `CARGO_HOME=/cargo`, and
+glibc's loader at `/lib64/ld-linux-x86-64.so.2` so GitHub's mounted node can run
+(the `container-smoke` job runs it as a real `container:` job). `/lib64/libc.so.6`
+is there for `envinfo.sh`, which reports the glibc version the same way as in
+the others. `nix develop` in `bakeoff/nix` gives the same tools locally.
+
+- **Build time** is `nix build .#bench-image` alone, on a fresh runner with an
+  empty Nix store and no build cache of ours (no `magic-nix-cache`, no
+  `actions/cache`). Nix still substitutes the packages nixpkgs publishes from
+  `cache.nixos.org`; only the iai-callgrind-runner (a cargo build), the layer
+  metadata and the image are built on the runner. The tool that pushes
+  (`skopeo-nix2container`) is built apart and timed apart, as `docker push` is
+  not in the Dockerfile builds' time. `RESULTS.md` quotes Nix's own "will be
+  built / will be fetched" line.
+- **Reproducibility.** `nix build --rebuild` builds the image's derivation, the
+  environment and the iai-callgrind-runner again and fails if an output differs;
+  then the image is exported again (`skopeo copy` to a directory) and its manifest
+  digest is compared with the one pushed. Only the Nix-built parts can be rebuilt
+  here: the packages substituted from `cache.nixos.org` are trusted as built there.
+  The Dockerfile variants were not checked (they pull packages and write
+  timestamps, so they are not expected to be bit-identical).
+- **CVEs.** Trivy runs on the image as on the others, but it reads package
+  databases (dpkg, apk) and language lockfiles, not Nix store paths, so its result
+  is recorded and marked not meaningful. The number that counts is
+  [`vulnix`](https://github.com/nix-community/vulnix) over the runtime closure of
+  the image's environment: one finding per (package, CVE) pair, HIGH+CRITICAL being
+  CVSS v3 >= 7.0. vulnix matches package names and versions against the NVD, so it
+  has no fix information and its numbers are not comparable with Trivy's
+  distribution advisories; both over- and under-report.
 
 Wolfi's packages are a rolling repository: the base digest pins the base image,
 but rebuilding the Dockerfile later floats to the packages of that day. The

@@ -3,7 +3,7 @@
     python3 -I report.py ARTIFACTS_DIR
 
 ARTIFACTS_DIR holds the downloaded artifacts, one directory each:
-  build-<variant>/build.json
+  build-<variant>/build.json   (nix's also holds "repro" and "vulnix", see bakeoff.yml)
   measure-<variant>-<run>/{measure.json, counts.json, env.txt}
 """
 import json
@@ -11,8 +11,8 @@ import pathlib
 import statistics
 import sys
 
-VARIANTS = ["ubuntu", "debian", "wolfi", "vm"]
-LABEL = {"ubuntu": "ubuntu 24.04", "debian": "debian trixie-slim", "wolfi": "wolfi", "vm": "VM (today's setup)"}
+VARIANTS = ["ubuntu", "debian", "wolfi", "nix", "vm"]
+LABEL = {"ubuntu": "ubuntu 24.04", "debian": "debian trixie-slim", "wolfi": "wolfi", "nix": "nix (nixpkgs 26.05)", "vm": "VM (today's setup)"}
 BASE = "ubuntu"
 
 
@@ -118,6 +118,66 @@ def main():
                 return r["env"][key]
         return "n/a"
 
+    def trivy_note(v):
+        t, h = cve(v, "total"), cve(v, "high_critical")
+        return "no Trivy result" if t is None else f"Trivy ran and reported {t} total, {h} HIGH+CRITICAL"
+
+    def repro(v):
+        b = data[v]["build"] or {}
+        if v == "vm":
+            return "n/a (no image)"
+        r = b.get("repro")
+        if r is None:
+            return "not checked (a Dockerfile build; no rebuild was compared)" if b else "n/a"
+        what = "yes" if r.get("bit_identical") else "no"
+        rc = r.get("rebuild_exit", {})
+        return (f"{what} (nix build --rebuild of image/env/runner: exit {rc.get('image')}/{rc.get('env')}/{rc.get('iai_callgrind_runner')}; "
+                f"re-exported manifest digest {'equal' if r.get('manifest_identical') else 'different'}, "
+                f"layer digests {'equal' if r.get('layers_identical') else 'different'})")
+
+    def scanner(v):
+        if v == "vm":
+            return "n/a"
+        if v == "nix":
+            x = (data[v]["build"] or {}).get("vulnix") or {}
+            used = "vulnix (failed to run)" if x.get("failed") else "vulnix"
+            return f"{used}; Trivy: not meaningful, it cannot see Nix packages ({trivy_note(v)})"
+        return "Trivy"
+
+    def cve_rows(v):
+        if v == "nix":
+            x = (data[v]["build"] or {}).get("vulnix") or {}
+            if not x or x.get("failed"):
+                return [("CVEs HIGH+CRITICAL with a fix", "n/a"), ("CVEs HIGH+CRITICAL, all", "n/a (vulnix failed)"),
+                        ("CVEs total, all severities", "n/a (vulnix failed)")]
+            return [("CVEs HIGH+CRITICAL with a fix", "n/a (vulnix has no fix data)"),
+                    ("CVEs HIGH+CRITICAL, all", f"{x['high_critical']} (vulnix, CVSS v3 >= 7.0)"),
+                    ("CVEs total, all severities", f"{x['total']} (vulnix)")]
+        return [
+            ("CVEs HIGH+CRITICAL with a fix", "n/a" if cve(v, "high_critical_fixed") is None else str(cve(v, "high_critical_fixed"))),
+            ("CVEs HIGH+CRITICAL, all", "n/a" if cve(v, "high_critical") is None else str(cve(v, "high_critical"))),
+            ("CVEs total, all severities", "n/a" if cve(v, "total") is None else str(cve(v, "total"))),
+        ]
+
+    def extra(v):
+        # Rows only the nix variant has.
+        b = data[v]["build"] or {}
+        if v != "nix" or not b:
+            return []
+        x = b.get("vulnix") or {}
+        out = [("Build, what Nix did", b.get("nix_plan") or "n/a"),
+               ("Build time of the push tool (skopeo-nix2container), not in the build time", secs(b.get("push_tool_build_seconds"))),
+               ("Layers", str(b.get("layers")))]
+        if x.get("version"):
+            out.append(("vulnix version", x["version"]))
+        if x and not x.get("failed"):
+            out += [("vulnix: distinct CVE ids", str(x["unique_cves"])), ("vulnix: CRITICAL (CVSS v3 >= 9.0)", str(x["critical"])),
+                    ("vulnix: without a CVSS v3 score", str(x["unscored"])), ("vulnix: packages affected", str(x["packages_affected"]))]
+        r = b.get("repro") or {}
+        if r:
+            out += [("First manifest digest", f"`{r.get('first_manifest_digest')}`"), ("Second manifest digest", f"`{r.get('second_manifest_digest')}`")]
+        return out
+
     def rows(v):
         b = data[v]["build"] or {}
         same, worst = stable(v)
@@ -127,7 +187,7 @@ def main():
             ("Runs measured", f"{len(data[v]['runs'])} of 3"),
             ("Compressed size", mb(b.get("compressed_bytes")) if b else "n/a (no image)"),
             ("Uncompressed size", mb(b.get("uncompressed_bytes")) if b else "n/a (no image)"),
-            ("Build time (no cache)", secs(b.get("build_seconds")) if b else "n/a"),
+            ("Build time (no cache)", (secs(b.get("build_seconds")) + (" (cold Nix store; packages substituted from cache.nixos.org)" if v == "nix" else "")) if b else "n/a"),
             ("Pull time (VM: apt + cargo install), median", secs(median(runs(v, pull_key)))),
             ("Pull times, runs 1-3", ", ".join(secs(x) for x in runs(v, pull_key)) or "n/a"),
             ("Bench compile, median", secs(median(runs(v, "compile_seconds")))),
@@ -140,9 +200,9 @@ def main():
             ("glibc", env(v, "glibc")),
             ("rustc", env(v, "rustc")),
             ("setarch", env(v, "setarch")),
-            ("CVEs HIGH+CRITICAL with a fix", "n/a" if cve(v, "high_critical_fixed") is None else str(cve(v, "high_critical_fixed"))),
-            ("CVEs HIGH+CRITICAL, all", "n/a" if cve(v, "high_critical") is None else str(cve(v, "high_critical"))),
-            ("CVEs total, all severities", "n/a" if cve(v, "total") is None else str(cve(v, "total"))),
+            ("CVE scanner used", scanner(v)),
+            *cve_rows(v),
+            ("Reproducible image (bit-identical rebuild)", repro(v)),
         ]
 
     out = ["# Base-image bake-off: results", ""]
@@ -157,7 +217,7 @@ def main():
 
     for v in present:
         out += [f"## {LABEL[v]}", "", "| | |", "|---|---|"]
-        out += [f"| {k} | {val} |" for k, val in rows(v)]
+        out += [f"| {k} | {val} |" for k, val in rows(v) + extra(v)]
         out.append("")
         pkgs = data[v]["runs"][0]["pkgs"] if data[v]["runs"] else []
         if pkgs:

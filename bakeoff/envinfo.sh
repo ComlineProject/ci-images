@@ -26,4 +26,8 @@ elif command -v apk >/dev/null 2>&1; then
   apk list -I 2>/dev/null \
     | grep -E '^(valgrind|glibc|glibc-dev|gcc|build-base|git|gh|python-3[^ ]*|zstd|ca-certificates-bundle|binutils|make)-[0-9]' \
     | sed 's/ .*//; s/^/pkg=/' || true
+elif [ -r /etc/nix-packages ]; then
+  # The nix variant: its image has no package manager; the flake writes the
+  # names of the packages it was built from.
+  sed 's/^/pkg=/' /etc/nix-packages
 fi

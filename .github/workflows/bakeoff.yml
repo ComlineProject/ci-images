@@ -1,13 +1,17 @@
 name: bakeoff
 
 # Base-image bake-off for the bench image: ubuntu 24.04 vs debian trixie-slim
-# vs wolfi, the same tools in each, measured on GitHub-hosted runners. Nothing
-# here is built or measured locally. See bakeoff/README.md.
+# vs wolfi vs a Nix-built image, the same tools in each, measured on
+# GitHub-hosted runners. Nothing here is built or measured locally. See
+# bakeoff/README.md.
 #
-# build:   each variant (amd64), pushed to ghcr.io/comlineproject/ci-bakeoff:<variant>;
-#          sizes and build time.
+# build:   each Dockerfile variant (amd64), pushed to ghcr.io/comlineproject/ci-bakeoff:<variant>;
+#          sizes and build time. build-nix does the same for the flake in
+#          bakeoff/nix (nix build, pushed with nix2container's skopeo), and
+#          also checks that a rebuild is bit-identical and runs vulnix.
 # measure: pull by digest, then core's instruction-count bench in it (3 runs),
 #          plus the runner VM as today (apt + cargo install), and a Trivy scan.
+# container-smoke: the nix image as a real `container:` job.
 # report:  the tables, in the job summary and bakeoff/RESULTS.md (an artifact).
 #
 # A run that only changes bakeoff/RESULTS.md (the committed results) is skipped.
@@ -135,9 +139,196 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # The Nix variant. Not a Dockerfile: the image is built from bakeoff/nix
+  # (flake.nix, with flake.lock pinning nixpkgs, rust-overlay and nix2container
+  # by rev and narHash) and pushed with nix2container's skopeo. The Nix store
+  # starts empty on a fresh runner and the build has no cache of its own (no
+  # magic-nix-cache, no actions/cache), but Nix substitutes the packages
+  # nixpkgs publishes from cache.nixos.org, so "no cache" here means a cold
+  # local store, not a build of everything from source. Only the
+  # iai-callgrind-runner (cargo build from the crates.io source), the layer
+  # metadata and the image itself are built here.
+  build-nix:
+    name: build (nix)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    env:
+      VARIANT: nix
+      FLAKE: ./bakeoff/nix
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          # Only so the flake inputs (github:) are fetched with a token, not
+          # anonymously (rate limits).
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check that flake.lock is in sync with flake.nix
+        run: |
+          set -euo pipefail
+          nix --version
+          # Fails if the lock would have to change.
+          nix flake metadata "$FLAKE" --no-update-lock-file --json \
+            | jq -r '.locks.nodes | to_entries[] | select(.value.locked) | "\(.key) \(.value.locked.rev) \(.value.locked.narHash)"'
+      # The build clock: `nix build` of the image alone (evaluation, the
+      # substitutions, the iai-callgrind-runner build, the layers). The tool
+      # that pushes (skopeo-nix2container) is not in it, as docker push is not
+      # in the other variants'; it is timed on its own below.
+      - name: Build the image
+        run: |
+          set -euo pipefail
+          start=$(date +%s.%N)
+          nix build "$FLAKE#bench-image" --print-build-logs --out-link result-image 2>&1 | tee nix-build.log
+          end=$(date +%s.%N)
+          echo "BUILD_SECONDS=$(awk -v a="$end" -v b="$start" 'BEGIN { printf "%.1f", a - b }')" >> "$GITHUB_ENV"
+          # What Nix said it would build and fetch.
+          grep -E 'will be built|will be fetched|derivations? will be|paths? will be' nix-build.log | tr '\n' ' ' > nix-plan.txt || true
+          cat nix-plan.txt; echo
+          readlink -f result-image
+      - name: Build the push tool (not in the build time)
+        run: |
+          set -euo pipefail
+          start=$(date +%s.%N)
+          nix build "$FLAKE#bench-image.copyTo" --print-build-logs --no-link
+          end=$(date +%s.%N)
+          echo "TOOL_SECONDS=$(awk -v a="$end" -v b="$start" 'BEGIN { printf "%.1f", a - b }')" >> "$GITHUB_ENV"
+      - name: Push
+        id: push
+        run: |
+          set -euo pipefail
+          nix run "$FLAKE#bench-image.copyTo" -- "docker://$IMAGE:$VARIANT" \
+            --dest-authfile "$HOME/.docker/config.json" --digestfile digest.txt
+          digest=$(cat digest.txt)
+          [[ "$digest" == sha256:* ]] || { echo "no digest from skopeo" >&2; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "DIGEST=$digest" >> "$GITHUB_ENV"
+      - name: Sizes
+        run: |
+          set -euo pipefail
+          # Uncompressed: what Docker holds after pulling it, as `docker image
+          # inspect` .Size is for the other variants. Compressed: the layers of
+          # the image manifest, as the registry holds them.
+          docker pull "$IMAGE@$DIGEST" > /dev/null
+          uncompressed=$(docker image inspect "$IMAGE@$DIGEST" --format '{{.Size}}')
+          docker buildx imagetools inspect --raw "$IMAGE@$DIGEST" > manifest.json
+          if jq -e '.manifests' manifest.json > /dev/null; then
+            m=$(jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")][0].digest' manifest.json)
+            docker buildx imagetools inspect --raw "$IMAGE@$m" > manifest.json
+          fi
+          compressed=$(jq '[.layers[].size] | add' manifest.json)
+          mkdir -p out
+          cp manifest.json out/manifest.json
+          jq -n --arg variant "$VARIANT" --arg image "$IMAGE" --arg digest "$DIGEST" \
+            --argjson compressed "$compressed" --argjson uncompressed "$uncompressed" \
+            --argjson build_seconds "$BUILD_SECONDS" --argjson tool_seconds "$TOOL_SECONDS" \
+            --argjson layers "$(jq '.layers | length' manifest.json)" --arg plan "$(cat nix-plan.txt)" \
+            '{variant: $variant, image: $image, digest: $digest, compressed_bytes: $compressed,
+              uncompressed_bytes: $uncompressed, build_seconds: $build_seconds,
+              push_tool_build_seconds: $tool_seconds, layers: $layers, nix_plan: $plan}' > out/build.json
+          cat out/build.json
+
+      # Reproducibility: `nix build --rebuild` builds the derivation again and
+      # fails if the output differs from the one in the store. That is done
+      # for the image's own derivation, the environment and the
+      # iai-callgrind-runner (a real cargo build). Then the image is exported
+      # again, from the rebuilt derivations, and its manifest digest and layer
+      # digests are compared with what was pushed.
+      - name: Rebuild and compare
+        run: |
+          set -uo pipefail
+          rebuild() { # name, attribute
+            if nix build "$FLAKE#$2" --rebuild --no-link --print-build-logs > "out/rebuild-$1.log" 2>&1; then echo 0; else echo 1; fi
+          }
+          image_rc=$(rebuild image bench-image)
+          env_rc=$(rebuild env bench-env)
+          runner_rc=$(rebuild runner iai-callgrind-runner)
+          tail -3 out/rebuild-*.log
+          rm -rf rb
+          nix run "$FLAKE#bench-image.copyTo" -- "dir:$PWD/rb" > out/rebuild-export.log 2>&1 || true
+          second=sha256:$(sha256sum rb/manifest.json 2>/dev/null | cut -d' ' -f1)
+          manifest_same=false; [ "$second" = "$DIGEST" ] && manifest_same=true
+          layers_same=false
+          [ -f rb/manifest.json ] && [ "$(jq -c '[.layers[].digest]' rb/manifest.json)" = "$(jq -c '[.layers[].digest]' manifest.json)" ] && layers_same=true
+          identical=false
+          [ "$image_rc" = 0 ] && [ "$env_rc" = 0 ] && [ "$runner_rc" = 0 ] && [ "$manifest_same" = true ] && identical=true
+          jq -n --argjson image "$image_rc" --argjson env "$env_rc" --argjson runner "$runner_rc" \
+            --arg first "$DIGEST" --arg second "$second" \
+            --argjson manifest_same "$manifest_same" --argjson layers_same "$layers_same" --argjson identical "$identical" \
+            '{rebuild_exit: {image: $image, env: $env, iai_callgrind_runner: $runner},
+              first_manifest_digest: $first, second_manifest_digest: $second,
+              manifest_identical: $manifest_same, layers_identical: $layers_same, bit_identical: $identical}' > out/repro.json
+          cat out/repro.json
+          jq --slurpfile r out/repro.json '. + {repro: $r[0]}' out/build.json > out/build.tmp && mv out/build.tmp out/build.json
+
+      # The Nix-aware CVE scan: vulnix, from the same nixpkgs, over the
+      # runtime closure of the image's environment (everything under the
+      # image's /nix/store). A CVE is counted once per (package, CVE) pair,
+      # as Trivy counts a vulnerability once per package. HIGH+CRITICAL is
+      # CVSS v3 base score >= 7.0; vulnix has no fix information.
+      - name: vulnix
+        run: |
+          set -uo pipefail
+          env_path=$(nix build "$FLAKE#bench-env" --no-link --print-out-paths)
+          nix run "$FLAKE#vulnix" -- --version 2>&1 | head -1 | tee out/vulnix-version.txt
+          nix run "$FLAKE#vulnix" -- --closure --json "$env_path" > out/vulnix.json 2> out/vulnix.err
+          rc=$?
+          echo "vulnix exit status: $rc (0: nothing found, 2: vulnerabilities found)"
+          tail -5 out/vulnix.err
+          head -c 600 out/vulnix.json; echo
+          ver=$(cat out/vulnix-version.txt)
+          if [ "$rc" -gt 2 ] || ! jq -e 'type == "array"' out/vulnix.json > /dev/null 2>&1; then
+            echo "vulnix failed" >&2
+            jq --arg ver "$ver" --argjson rc "$rc" '. + {vulnix: {failed: true, exit_status: $rc, version: $ver}}' out/build.json > out/build.tmp
+          else
+            jq --slurpfile found out/vulnix.json --arg ver "$ver" --argjson rc "$rc" '
+              ($found[0] | [ .[] | . as $d | ($d.affected_by // [])[] as $cve
+                | {pkg: $d.name, cve: $cve, score: (($d.cvssv3_basescore // {})[$cve])} ]) as $v
+              | . + {vulnix: {
+                  failed: false, exit_status: $rc, version: $ver,
+                  total: ($v | length),
+                  unique_cves: ($v | map(.cve) | unique | length),
+                  high_critical: ([$v[] | select(.score != null and .score >= 7.0)] | length),
+                  critical: ([$v[] | select(.score != null and .score >= 9.0)] | length),
+                  unscored: ([$v[] | select(.score == null)] | length),
+                  packages_affected: ($v | map(.pkg) | unique | length)}}' out/build.json > out/build.tmp
+          fi
+          mv out/build.tmp out/build.json
+          jq .vulnix out/build.json
+      - name: Summary
+        run: |
+          set -euo pipefail
+          {
+            echo "### nix"
+            echo
+            echo "- digest: \`$DIGEST\`"
+            echo "- build (nix build of the image): ${BUILD_SECONDS} s; push tool build: ${TOOL_SECONDS} s"
+            echo "- $(cat nix-plan.txt)"
+            jq -r '"- compressed: \(.compressed_bytes / 1000000 | floor) MB, uncompressed: \(.uncompressed_bytes / 1000000 | floor) MB, layers: \(.layers)"' out/build.json
+            echo '- reproducibility:'; jq -c .repro out/build.json | sed 's/^/  /'
+            echo '- vulnix:'; jq -c .vulnix out/build.json | sed 's/^/  /'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: build-nix
+          path: out
+          if-no-files-found: error
+          retention-days: 14
+
   measure:
     name: measure (${{ matrix.variant }}, run ${{ matrix.run }})
-    needs: [lock, build]
+    needs: [lock, build, build-nix]
     # A variant that failed to build fails its own legs; the others still run.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
@@ -148,7 +339,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [ubuntu, debian, wolfi, vm]
+        variant: [ubuntu, debian, wolfi, nix, vm]
         run: [1, 2, 3]
     env:
       VARIANT: ${{ matrix.variant }}
@@ -290,6 +481,39 @@ jobs:
           path: ${{ runner.temp }}/out
           if-no-files-found: warn
           retention-days: 14
+
+  # The nix image as a job container, as `container:` does it: the runner
+  # starts it, mounts its own node (a glibc binary, run through the image's
+  # /lib64/ld-linux-x86-64.so.2) and runs the steps in it.
+  container-smoke:
+    name: nix image as a job container
+    needs: build-nix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/comlineproject/ci-bakeoff@${{ needs.build-nix.outputs.digest }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --security-opt seccomp=unconfined
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tools, paths, certificates
+        run: |
+          set -eu
+          sh bakeoff/envinfo.sh
+          echo "uid=$(id -u) HOME=$HOME CARGO_HOME=$CARGO_HOME PATH=$PATH"
+          command -v sh env
+          /usr/bin/env true
+          touch "$HOME/.writable" /tmp/.writable "$CARGO_HOME/.writable"
+          git ls-remote https://github.com/ComlineProject/ci-images HEAD
+          setarch -R true
+          valgrind --tool=none true
 
   report:
     name: report
