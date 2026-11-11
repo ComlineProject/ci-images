@@ -59,7 +59,16 @@ unzip (only a build stage has curl), `pkg-config`, xz-utils.
 
 ## Size
 
-Compressed (what a pull transfers) and uncompressed, per architecture: the
-build job of every run prints them in its summary and the publish run's
-`merge and attest` job prints the registry's. The sizes of the first build are
-in the pull request that introduced the images.
+From the first build (pull request #3, `Image size` step of each build job). The
+compressed size is the sum of the image's layers as `docker buildx` exports
+them (gzip), which is what a pull transfers; the `merge and attest` job of a
+publish run prints the registry's own figure.
+
+| Image | amd64 compressed | amd64 uncompressed | arm64 compressed | arm64 uncompressed |
+|---|---:|---:|---:|---:|
+| `ci-bench` | 449.7 MB | 1260 MB | 389.7 MB | 1129 MB |
+| `ci-fuzz` | 402.6 MB | 1115 MB | 359.0 MB | 1020 MB |
+| `ci-wasm` | 442.5 MB | 1253 MB | 400.1 MB | 1161 MB |
+| `ci-tools` | 467.5 MB | 1354 MB | 402.3 MB | 1183 MB |
+
+(For comparison, the ci-rust image was about 2.9 GB uncompressed on amd64.)
