@@ -62,7 +62,8 @@ fuzz)
   run cargo "+$CI_RUST_NIGHTLY" fuzz --version
   run cargo fuzz --version
   run gh --version
-  absent valgrind python3 wasm-pack cue cbindgen
+  run python3 --version
+  absent valgrind wasm-pack cue cbindgen
   # What cargo-fuzz asks of the compiler: a sanitizer runtime in the toolchain.
   work=$(mktemp -d); cd "$work"
   run cargo new --quiet --vcs none hello

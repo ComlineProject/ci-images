@@ -9,7 +9,7 @@ specification. Why Debian: [`../docs/base-choice.md`](../docs/base-choice.md).
 | Image | Jobs | Rust | Also in it |
 |---|---|---|---|
 | `ci-bench` | the instruction-count benchmarks (core, runtime) | stable 1.99.1, minimal | valgrind, iai-callgrind-runner 0.16.1, python3, gh |
-| `ci-fuzz` | the cargo-fuzz jobs (core, runtime) | nightly-2026-11-10, minimal | cargo-fuzz 0.13.2, gh |
+| `ci-fuzz` | the cargo-fuzz jobs (core, runtime) | nightly-2026-11-10, minimal | cargo-fuzz 0.13.2, gh, python3 (the Observatory `report-fuzz` action) |
 | `ci-wasm` | the WebAssembly build (simulator, playground), core's `ir_only` job | stable 1.99.1, minimal, `wasm32-unknown-unknown`, `wasm32-wasip1` | wasm-bindgen 0.2.127, wasm-pack 0.15.1, binaryen, jq |
 | `ci-tools` | cue, cbindgen and the musl build (runtime, specification) | stable 1.99.1, minimal, the musl target | cue v0.17.1, cbindgen 0.29.2, musl-tools, make, jq |
 

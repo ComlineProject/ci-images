@@ -211,13 +211,16 @@ RUN cargo install --locked --root /out --version "$CARGO_FUZZ_VERSION" cargo-fuz
 
 FROM fuzz-rust AS fuzz
 ARG RUST_NIGHTLY
+# python3: the Observatory report-fuzz action, run inside this container.
+RUN --mount=type=bind,source=apt-install.sh,target=/apt-install.sh \
+    sh /apt-install.sh python3
 COPY --from=fuzz-cargo /out/bin/ /usr/local/bin/
 COPY --from=dl-gh /out/ /usr/local/bin/
 ENV CI_RUST_NIGHTLY=${RUST_NIGHTLY}
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/ComlineProject/ci-images" \
       org.opencontainers.image.revision="${REVISION}" \
-      org.opencontainers.image.description="ComlineProject CI: Rust nightly and cargo-fuzz for the fuzz jobs (see images/versions.md)"
+      org.opencontainers.image.description="ComlineProject CI: Rust nightly, cargo-fuzz and python3 for the fuzz jobs (see images/versions.md)"
 
 
 # ---------------------------------------------------------------------------
