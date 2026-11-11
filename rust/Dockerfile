@@ -41,14 +41,29 @@ ARG CBINDGEN_VERSION=0.29.2
 
 # Ubuntu's packages. valgrind is Ubuntu 24.04's (3.22), on purpose: the
 # instruction-count baselines stay comparable with the hosted runner's.
+#
+# apt falls back to a second mirror when the first cannot be reached (a DNS
+# outage on ubuntu.com once took down a CI run): the sources point at a list of
+# mirrors, tried in order. Packages are signed, so a mirror is not trusted.
 FROM ${UBUNTU_IMAGE} AS apt
 ENV DEBIAN_FRONTEND=noninteractive
-RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80retries \
- && apt-get update -o APT::Update::Error-Mode=any \
- && apt-get install -y --no-install-recommends \
+RUN set -eu; \
+    mkdir -p /etc/apt/mirrors; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) printf '%s\n' http://archive.ubuntu.com/ubuntu/ http://mirrors.edge.kernel.org/ubuntu/ > /etc/apt/mirrors/main.txt; \
+             printf '%s\n' http://security.ubuntu.com/ubuntu/ http://mirrors.edge.kernel.org/ubuntu/ > /etc/apt/mirrors/security.txt ;; \
+      *)     printf '%s\n' http://ports.ubuntu.com/ubuntu-ports/ http://mirrors.ocf.berkeley.edu/ubuntu-ports/ http://ftp.fau.de/ubuntu-ports/ > /etc/apt/mirrors/main.txt; \
+             cp /etc/apt/mirrors/main.txt /etc/apt/mirrors/security.txt ;; \
+    esac; \
+    awk '/^URIs:/ { n++; print "URIs: mirror+file:/etc/apt/mirrors/" (n == 1 ? "main" : "security") ".txt"; next } { print }' \
+      /etc/apt/sources.list.d/ubuntu.sources > /tmp/ubuntu.sources; \
+    mv /tmp/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources; \
+    echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80retries; \
+    apt-get update -o APT::Update::Error-Mode=any; \
+    apt-get install -y --no-install-recommends \
       binaryen build-essential ca-certificates curl git jq make musl-tools \
-      pkg-config python3 unzip valgrind xz-utils zstd \
- && rm -rf /var/lib/apt/lists/*
+      pkg-config python3 unzip valgrind xz-utils zstd; \
+    rm -rf /var/lib/apt/lists/*
 
 
 # The toolchains, in the final image. CARGO_HOME and RUSTUP_HOME are outside
