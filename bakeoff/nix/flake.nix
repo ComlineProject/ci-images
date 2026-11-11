@@ -76,14 +76,17 @@
         pkgs.gzip
       ];
 
-      # Files that are not packages: /usr/bin/env, glibc's loader and libc at
-      # the paths other software expects (GitHub's mounted node runs through
-      # /lib64/ld-linux-x86-64.so.2; envinfo.sh finds libc at /lib64/libc.so.6),
-      # /etc/os-release and the package list for envinfo.sh.
+      # Files that are not packages: /usr/bin/env, the loader and libc at the
+      # paths other software expects, /etc/os-release and the package list for
+      # envinfo.sh. GitHub's mounted node is an ordinary glibc binary: it asks
+      # for /lib64/ld-linux-x86-64.so.2, which here is nix-ld, a shim that runs
+      # it with Nix's glibc (NIX_LD) and gives it libstdc++ and libgcc_s
+      # (NIX_LD_LIBRARY_PATH, below) without touching anything built by Nix.
+      # envinfo.sh finds libc at /lib64/libc.so.6.
       skeleton = pkgs.runCommand "skeleton" { } ''
         mkdir -p $out/usr/bin $out/lib64 $out/etc
         ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
-        ln -s ${pkgs.glibc}/lib/ld-linux-x86-64.so.2 $out/lib64/ld-linux-x86-64.so.2
+        ln -s ${pkgs.nix-ld}/libexec/nix-ld $out/lib64/ld-linux-x86-64.so.2
         ln -s ${pkgs.glibc}/lib/libc.so.6 $out/lib64/libc.so.6
         cat > $out/etc/os-release <<'EOF'
         ID=nix-image
@@ -129,6 +132,9 @@
             "CI_RUST_STABLE=1.99.1"
             "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
             "GIT_SSL_CAINFO=/etc/ssl/certs/ca-bundle.crt"
+            # For nix-ld, which runs binaries not built by Nix (the runner's node).
+            "NIX_LD=${pkgs.glibc}/lib/ld-linux-x86-64.so.2"
+            "NIX_LD_LIBRARY_PATH=${pkgs.stdenv.cc.cc.lib}/lib"
           ];
           Cmd = [ "/bin/sh" ];
           Labels = {
