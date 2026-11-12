@@ -79,7 +79,13 @@ does:
 - **Build leftovers**: what varies between two runs is not left in the image:
   `/var/log`, `/var/cache/apt`, `/var/lib/apt/lists`, the ldconfig and debconf
   caches, compiled Python (`*.pyc`), and what rustup and cargo downloaded
-  (`images/apt-install.sh`, `images/rustup.sh`).
+  (`images/apt-install.sh`, `images/rustup.sh`). rustup's list of installed
+  components (`lib/rustlib/components`) is written in a different order each
+  run, so it is sorted. The `cargo install` binaries (cargo-fuzz, cbindgen)
+  came out identical on both architectures without path remapping, so none is
+  applied.
+- **Tools of the build**: BuildKit (`driver-opts` in `build.yml`) and the
+  Dockerfile frontend (`# syntax=` line) are pinned by digest.
 
 The `build` job of a pull request checks it: it builds each image twice, with no
 cache, exports both as OCI archives and fails if their manifest digests differ,
@@ -88,6 +94,11 @@ pushes each architecture by digest (the same manifest as before is no new
 push), and `merge and attest` leaves `:latest`, the index and the attestation
 alone when the per-architecture manifests are the ones `:latest` already has,
 and only adds the `sha-` tags to it.
+
+`DEBIAN_SNAPSHOT` must not be later than the time of the build:
+`rewrite-timestamp` only lowers modification times, so files made earlier than
+`SOURCE_DATE_EPOCH` would keep the build's clock. `images/source-date-epoch.sh`
+fails when the date is in the future.
 
 A change to any input above, to a script in `images/`, or to the Dockerfile, is a
 new digest, as it should be.
