@@ -7,6 +7,12 @@ name: build
 # build provenance attestation, and then run core's bench in the published
 # ci-bench as a real `container:` job.
 #
+# The images are reproducible: the same inputs give the same digest (the
+# "Reproducible builds" section of images/versions.md). A pull request proves it
+# by building each image twice, without a cache, and comparing the digests. A
+# publish whose digests are the ones :latest already has pushes nothing new and
+# attests nothing: the consumers' Renovate sees no change.
+#
 # There is no weekly rebuild: the apt packages are pinned to the date of
 # DEBIAN_SNAPSHOT in images/Dockerfile, so a rebuild would change nothing.
 
@@ -29,12 +35,15 @@ env:
   CORE_SHA: f9d53265b82c86502439fea1759e256973865853
 
 jobs:
-  # Build each image natively for each architecture, load it into the local
-  # daemon and run the smoke test: as root and as another uid, with no network.
+  # Build each image natively for each architecture, as an OCI archive with
+  # the timestamps rewritten to SOURCE_DATE_EPOCH (the date of DEBIAN_SNAPSHOT,
+  # images/source-date-epoch.sh), load it into the local daemon and run the
+  # smoke test: as root and as another uid, with no network. On a pull request,
+  # also build it twice more without any cache and require the same digest.
   build:
     name: build (${{ matrix.image }}, ${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -44,15 +53,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(sh images/source-date-epoch.sh)" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: images
           target: ${{ matrix.image }}
           platforms: linux/${{ matrix.arch }}
-          load: true
-          tags: ci-${{ matrix.image }}:test
-          build-args: REVISION=${{ github.sha }}
+          outputs: type=docker,name=ci-${{ matrix.image }}:test,rewrite-timestamp=true
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
           provenance: false
           sbom: false
           cache-from: type=gha,scope=ci-${{ matrix.image }}-${{ matrix.arch }}
@@ -62,14 +74,15 @@ jobs:
       - name: Smoke test (uid 1001)
         run: docker run --rm --network none --user 1001:1001 -e HOME=/tmp -v "$PWD/images/smoke.sh:/smoke.sh:ro" ci-${{ matrix.image }}:test bash /smoke.sh ${{ matrix.image }}
       # The same image again as an OCI archive (from the build cache, so it is
-      # quick): the layers' sizes there are what a pull transfers.
+      # quick): the layers' sizes there are what a pull transfers, and its
+      # manifest digest is what the registry will hold.
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: images
           target: ${{ matrix.image }}
           platforms: linux/${{ matrix.arch }}
-          outputs: type=oci,dest=${{ runner.temp }}/image.tar
-          build-args: REVISION=${{ github.sha }}
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar,rewrite-timestamp=true
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
           provenance: false
           sbom: false
           cache-from: type=gha,scope=ci-${{ matrix.image }}-${{ matrix.arch }}
@@ -79,6 +92,51 @@ jobs:
           compressed=$(bash images/oci-size.sh "$RUNNER_TEMP/image.tar")
           uncompressed=$(docker image inspect ci-${{ matrix.image }}:test --format '{{.Size}}')
           echo "ci-${{ matrix.image }} linux/${{ matrix.arch }}: $((compressed / 1000000)) MB compressed ($compressed bytes), $((uncompressed / 1000000)) MB uncompressed" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "manifest digest: $(bash images/oci-digest.sh "$RUNNER_TEMP/image.tar")"
+      # The reproducibility check: the same image twice, each build with no
+      # cache (not the registry's, not the first build's), so every step runs
+      # again. The OCI manifest digest of the two exports must be the same.
+      - name: Build again, no cache (1)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: images
+          target: ${{ matrix.image }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=oci,dest=${{ runner.temp }}/repro-1.tar,rewrite-timestamp=true
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          provenance: false
+          sbom: false
+          no-cache: true
+      - name: Build again, no cache (2)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: images
+          target: ${{ matrix.image }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=oci,dest=${{ runner.temp }}/repro-2.tar,rewrite-timestamp=true
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          provenance: false
+          sbom: false
+          no-cache: true
+      - name: Check the two builds are the same
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          one=$(bash images/oci-digest.sh "$RUNNER_TEMP/repro-1.tar")
+          two=$(bash images/oci-digest.sh "$RUNNER_TEMP/repro-2.tar")
+          cached=$(bash images/oci-digest.sh "$RUNNER_TEMP/image.tar")
+          echo "ci-${{ matrix.image }} linux/${{ matrix.arch }}: build 1 $one, build 2 $two (first build, with cache: $cached)" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$one" != "$two" ]; then
+            echo "::error::ci-${{ matrix.image }} linux/${{ matrix.arch }} is not reproducible: $one != $two"
+            python3 -I images/oci-diff.py "$RUNNER_TEMP/repro-1.tar" "$RUNNER_TEMP/repro-2.tar" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [ "$one" != "$cached" ]; then
+            echo "::warning::the cached build differs from the uncached ones: $cached != $one"
+            python3 -I images/oci-diff.py "$RUNNER_TEMP/image.tar" "$RUNNER_TEMP/repro-1.tar" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
       # core's instruction-count bench, in the image as `docker run` (the
       # published image runs it as a `container:` job, below). amd64 only: the
       # counts are per architecture, and this is a does-it-work check.
@@ -98,7 +156,8 @@ jobs:
             -w /work ci-bench:test sh /bench-check.sh
 
   # Push each image and architecture by digest, then smoke-test exactly what
-  # was pushed.
+  # was pushed. The build is reproducible, so for an unchanged image this is
+  # the manifest the registry already holds: the push adds nothing.
   publish:
     name: publish (${{ matrix.image }}, ${{ matrix.arch }})
     if: github.ref == 'refs/heads/main'
@@ -119,7 +178,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(sh images/source-date-epoch.sh)" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
@@ -131,12 +194,12 @@ jobs:
           context: images
           target: ${{ matrix.image }}
           platforms: linux/${{ matrix.arch }}
-          build-args: REVISION=${{ github.sha }}
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
           provenance: false
           sbom: false
           cache-from: type=gha,scope=ci-${{ matrix.image }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=ci-${{ matrix.image }}-${{ matrix.arch }}
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true,rewrite-timestamp=true
       - name: Smoke test the pushed image
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -156,7 +219,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Join the architectures of each image into one manifest, tag it, attest it.
+  # Join the architectures of each image into one manifest, tag it, attest it,
+  # unless :latest already has exactly these per-architecture manifests: then
+  # the image is unchanged, its index is only given the new tags (the same
+  # digest, nothing new is pushed) and it is not attested again.
   merge:
     name: merge and attest (${{ matrix.image }})
     needs: publish
@@ -180,6 +246,8 @@ jobs:
           pattern: digests-${{ matrix.image }}-*
           merge-multiple: true
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
@@ -193,13 +261,45 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=sha,prefix=sha-,format=long
             type=raw,value=latest
+      # Is what was just built what :latest already is? Compare the
+      # per-architecture manifests, not the index: the index is derived from
+      # them, and a retag must not depend on how it was assembled.
+      - name: Compare with :latest
+        id: current
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          set -euo pipefail
+          built=$(printf 'sha256:%s\n' * | sort | tr '\n' ' ')
+          latest=$(docker buildx imagetools inspect "$IMAGE:latest" --raw 2> /dev/null \
+            | jq -r '[.manifests[]? | select(.platform.os == "linux") | .digest] | sort | join(" ")' || true)
+          echo "built:  $built"
+          echo "latest: ${latest:-none}"
+          if [ "${built% }" = "$latest" ]; then
+            digest=$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json .Manifest}}' | jq -r .digest)
+            echo "unchanged=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          else
+            echo "unchanged=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Create the manifest list
+        if: steps.current.outputs.unchanged != 'true'
         working-directory: ${{ runner.temp }}/digests
         run: |
           # shellcheck disable=SC2046
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "$IMAGE@sha256:%s " *)
+      # Unchanged: tag the index :latest already is, as it is. The digest does
+      # not change; the sha tags are what the bench job below and Renovate follow.
+      - name: Tag the unchanged image
+        if: steps.current.outputs.unchanged == 'true'
+        env:
+          DIGEST: ${{ steps.current.outputs.digest }}
+        run: |
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            "$IMAGE@$DIGEST"
       - name: Resolve the digest
         id: digest
         run: |
@@ -210,6 +310,10 @@ jobs:
           {
             echo "## ci-${{ matrix.image }}"
             echo
+            if [ "${{ steps.current.outputs.unchanged }}" = true ]; then
+              echo "Unchanged: the digest is the one :latest already had, nothing new was pushed or attested."
+              echo
+            fi
             echo "Digest: \`$digest\`"
             echo
             echo "Tags: $(jq -r '.tags | map("\`" + . + "\`") | join(", ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
@@ -229,7 +333,8 @@ jobs:
             echo "  image: $IMAGE@$digest"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - if: steps.current.outputs.unchanged != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}

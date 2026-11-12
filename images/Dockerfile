@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 #
 # The CI images of ComlineProject, one Dockerfile, one build target each:
 #
@@ -188,9 +188,7 @@ RUN --mount=type=bind,source=arch.sh,target=/arch.sh \
 COPY --from=dl-iai /out/ /usr/local/bin/
 COPY --from=dl-gh /out/ /usr/local/bin/
 ENV CI_RUST_STABLE=${RUST_STABLE}
-ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/ComlineProject/ci-images" \
-      org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.description="ComlineProject CI: Rust stable, valgrind and iai-callgrind-runner for the benchmarks (see images/versions.md)"
 
 
@@ -217,9 +215,7 @@ RUN --mount=type=bind,source=apt-install.sh,target=/apt-install.sh \
 COPY --from=fuzz-cargo /out/bin/ /usr/local/bin/
 COPY --from=dl-gh /out/ /usr/local/bin/
 ENV CI_RUST_NIGHTLY=${RUST_NIGHTLY}
-ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/ComlineProject/ci-images" \
-      org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.description="ComlineProject CI: Rust nightly, cargo-fuzz and python3 for the fuzz jobs (see images/versions.md)"
 
 
@@ -239,9 +235,7 @@ RUN --mount=type=bind,source=arch.sh,target=/arch.sh \
     sh /rustup.sh "$RUST_STABLE" stable -t wasm32-unknown-unknown -t wasm32-wasip1
 COPY --from=dl-wasm /out/ /usr/local/bin/
 ENV CI_RUST_STABLE=${RUST_STABLE}
-ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/ComlineProject/ci-images" \
-      org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.description="ComlineProject CI: Rust stable with wasm32 (unknown and wasip1), wasm-bindgen, wasm-pack and binaryen (see images/versions.md)"
 
 
@@ -269,7 +263,5 @@ ARG RUST_STABLE
 COPY --from=tools-cargo /out/bin/ /usr/local/bin/
 COPY --from=dl-cue /out/ /usr/local/bin/
 ENV CI_RUST_STABLE=${RUST_STABLE}
-ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/ComlineProject/ci-images" \
-      org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.description="ComlineProject CI: Rust stable with musl, cue and cbindgen (see images/versions.md)"

@@ -4,7 +4,9 @@
 # e.g. -t wasm32-unknown-unknown), make it the default, and link LINK-<triple>
 # to it, so `stable` / `nightly` name the pinned toolchain without a download.
 # Everything under RUSTUP_HOME and CARGO_HOME is made open to every uid, in
-# this one step so it adds no second copy of the files to the image.
+# this one step so it adds no second copy of the files to the image. What
+# rustup and cargo downloaded (the archives, the registry index) is removed:
+# it is not needed afterwards, and it is not the same from one run to the next.
 set -eu
 . /arch.sh
 toolchain=$1 link=$2
@@ -18,4 +20,10 @@ rustup set auto-self-update disable
 rustup toolchain install "$toolchain" --profile minimal "$@"
 rustup default "$toolchain"
 ln -s "${toolchain}-${gnu}" "$RUSTUP_HOME/toolchains/${link}-${gnu}"
+# rustup writes the list of the components it installed in an order that varies
+# from run to run (it comes out of a hash map); a sorted list means the same.
+LC_ALL=C sort -o "$RUSTUP_HOME/toolchains/${toolchain}-${gnu}/lib/rustlib/components" \
+  "$RUSTUP_HOME/toolchains/${toolchain}-${gnu}/lib/rustlib/components"
+rm -rf "$RUSTUP_HOME/downloads" "$RUSTUP_HOME/tmp" \
+       "$CARGO_HOME/registry" "$CARGO_HOME/git" "$CARGO_HOME/.package-cache" "$CARGO_HOME/.package-cache-mutate"
 chmod -R a+rwX "$RUSTUP_HOME" "$CARGO_HOME"
