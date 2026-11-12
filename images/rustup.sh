@@ -20,6 +20,10 @@ rustup set auto-self-update disable
 rustup toolchain install "$toolchain" --profile minimal "$@"
 rustup default "$toolchain"
 ln -s "${toolchain}-${gnu}" "$RUSTUP_HOME/toolchains/${link}-${gnu}"
+# rustup writes the list of the components it installed in an order that varies
+# from run to run (it comes out of a hash map); a sorted list means the same.
+LC_ALL=C sort -o "$RUSTUP_HOME/toolchains/${toolchain}-${gnu}/lib/rustlib/components" \
+  "$RUSTUP_HOME/toolchains/${toolchain}-${gnu}/lib/rustlib/components"
 rm -rf "$RUSTUP_HOME/downloads" "$RUSTUP_HOME/tmp" \
        "$CARGO_HOME/registry" "$CARGO_HOME/git" "$CARGO_HOME/.package-cache" "$CARGO_HOME/.package-cache-mutate"
 chmod -R a+rwX "$RUSTUP_HOME" "$CARGO_HOME"
