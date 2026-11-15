@@ -158,5 +158,6 @@ publish run prints the registry's own figure.
 | `ci-fuzz` | 402.6 MB | 1115 MB | 359.0 MB | 1020 MB |
 | `ci-wasm` | 442.5 MB | 1253 MB | 400.1 MB | 1161 MB |
 | `ci-tools` | 467.5 MB | 1354 MB | 402.3 MB | 1183 MB |
+| `ci-flatpak` | 941 MB (pull request #8) | 2571 MB | none | none |
 
 (For comparison, the ci-rust image was about 2.9 GB uncompressed on amd64.)
