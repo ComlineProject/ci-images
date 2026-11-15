@@ -304,7 +304,7 @@ ARG VSCODIUM_REF
 ARG VSCODIUM_COMMIT
 ARG RUNTIME_REF
 ARG RUNTIME_COMMIT
-# ostree: to pull the pinned commits (flatpak itself cannot install by commit).
+# ostree: to prune what the pinned commits leave behind.
 # The machine id apt's postinst writes differs in every build, so it is removed:
 # the first dbus-daemon that needs one makes it.
 RUN --mount=type=bind,source=apt-install.sh,target=/apt-install.sh \

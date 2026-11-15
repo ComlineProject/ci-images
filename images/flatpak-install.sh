@@ -6,15 +6,17 @@
 #   VSCODIUM_REF, VSCODIUM_COMMIT   the app, and the exact build of it
 #   RUNTIME_REF,  RUNTIME_COMMIT    its runtime, and the exact build of it
 #
-# Both are pulled by commit (`ostree pull REMOTE REF@COMMIT`, signature-checked
-# against Flathub's key like any pull) and then installed from that local copy,
-# so the image holds what the ARGs say whatever Flathub's current build is. A
-# SYSTEM installation (/var/lib/flatpak), so every uid sees it and nothing
-# depends on a home directory. No dependencies or related extensions (the base
-# app is part of the app's files already; GL, locale and codecs are for windows
-# the image never opens). What varies from one build to the next (caches,
-# summaries, appstream data) is removed: see "Reproducible builds" in
-# images/versions.md.
+# Installed by the latest Flathub has, then moved to the exact commit with
+# `flatpak update --commit` (Flathub keeps the history of a ref), and the
+# commits nobody refers to any more are pruned. The commit is what the image
+# holds, whatever Flathub's current build is. (ostree's own `pull REF@COMMIT`
+# would fetch the commit directly, but Flathub answers 403 to the `ostree`
+# client's user agent: only flatpak's is let through.) A SYSTEM installation
+# (/var/lib/flatpak), so every uid sees it and nothing depends on a home
+# directory. No dependencies or related extensions: the base app is part of the
+# app's files already, and GL, locale and codecs are for windows the image never
+# opens. What varies from one build to the next (caches, summaries, appstream
+# data) is removed: see "Reproducible builds" in images/versions.md.
 set -eu
 
 : "${VSCODIUM_REF:?}" "${VSCODIUM_COMMIT:?}" "${RUNTIME_REF:?}" "${RUNTIME_COMMIT:?}"
@@ -22,15 +24,19 @@ repo=/var/lib/flatpak/repo
 
 flatpak remote-add --system flathub /dl/flathub.flatpakrepo
 
-pull_and_install() {
+install_pinned() {
   ref=$1 commit=$2
-  ostree --repo="$repo" pull flathub "$ref@$commit"
-  flatpak install --system --noninteractive --assumeyes --no-pull --no-deps --no-related flathub "$ref"
-  have=$(flatpak info --system --show-commit "${ref#*/}")
+  flatpak install --system --noninteractive --assumeyes --no-deps --no-related flathub "$ref"
+  flatpak update --system --noninteractive --assumeyes --no-deps --no-related --commit="$commit" "$ref"
+  have=$(flatpak info --system --show-commit "$ref")
   [ "$have" = "$commit" ] || { echo "installed $ref is $have, not $commit" >&2; exit 1; }
 }
-pull_and_install "$RUNTIME_REF" "$RUNTIME_COMMIT"
-pull_and_install "$VSCODIUM_REF" "$VSCODIUM_COMMIT"
+install_pinned "$RUNTIME_REF" "$RUNTIME_COMMIT"
+install_pinned "$VSCODIUM_REF" "$VSCODIUM_COMMIT"
+
+# The latest builds the installs started from: no ref points at them now.
+ostree --repo="$repo" prune --refs-only --depth=0
+ostree --repo="$repo" refs
 
 flatpak list --system --columns=ref,commit,installation
 
