@@ -12,9 +12,11 @@ specification. Why Debian: [`../docs/base-choice.md`](../docs/base-choice.md).
 | `ci-fuzz` | the cargo-fuzz jobs (core, runtime) | nightly-2026-11-10, minimal | cargo-fuzz 0.13.2, gh, python3 (the Observatory `report-fuzz` action) |
 | `ci-wasm` | the WebAssembly build (simulator, playground), core's `ir_only` job | stable 1.99.1, minimal, `wasm32-unknown-unknown`, `wasm32-wasip1` | wasm-bindgen 0.2.127, wasm-pack 0.15.1, binaryen, jq, clang (C sources compiled for wasm32: tree-sitter, psm) |
 | `ci-tools` | cue, cbindgen and the musl build (runtime, specification) | stable 1.99.1, minimal, the musl target | cue v0.17.1, cbindgen 0.29.2, musl-tools, make, jq |
+| `ci-flatpak` | the sandbox tests of the VSCodium extension (comline-vscode's `flatpak.yml`), amd64 only | none | flatpak, bubblewrap, xdg-dbus-proxy, dbus-daemon, procps, ostree; Flathub's `com.vscodium.codium` and its runtime `org.freedesktop.Sdk//26.08` |
 
-All four have, from the base: git, ca-certificates, zstd (for `actions/cache`),
-and `build-essential` (rustc links with `cc`).
+The four Rust images have, from the base: git, ca-certificates, zstd (for
+`actions/cache`), and `build-essential` (rustc links with `cc`). `ci-flatpak` has
+the base only (git, ca-certificates, zstd): it builds nothing.
 
 ## Base
 
@@ -52,6 +54,46 @@ python3 3.13.5, git 2.47.3. The smoke test prints the rest.
 | binaryen (`wasm-opt`) | wasm | Debian's (the snapshot's) | apt (snapshot) | simulator's `ci.yml` and `reports.yml`, playground's `deploy.yml`. Ubuntu 24.04's was version 108; Debian trixie's is newer. |
 | jq | wasm | Debian's | apt (snapshot) | simulator's wasm-bindgen version check. |
 | gh | bench, fuzz | 2.103.3 | release binary | The fuzz, nightly and CI workflows use `gh issue` and `gh api`, which a job container does not have. |
+
+### Flatpak
+
+| What | Version | Why |
+|---|---|---|
+| flatpak, bubblewrap, xdg-dbus-proxy, dbus-daemon, procps | Debian's (the snapshot's) | The sandbox under test is Flatpak's; `dbus-run-session` (dbus-daemon) is the session bus `flatpak-spawn --host` talks to; `pgrep`/`pkill` (procps) are what the tests run on the "host". Debian's flatpak is 1.16, newer than Ubuntu 24.04's 1.14 the VM ran. ostree is only for pruning what an update leaves in the repository. |
+| Flathub remote | `flathub.flatpakrepo`, SHA-256 `FLATHUB_REPO_SHA256` | The remote's file carries Flathub's signing key; it is hash-checked like a release binary. |
+| `com.vscodium.codium` | `VSCODIUM_COMMIT` (Flathub's build of 2026-11-10) | The real app with the permissions Flathub gives it, as a system installation. An exact commit, so the image says which build the tests ran on, and a new Flathub build is a reviewed change here. Recorded in `/etc/ci-flatpak/vscodium-commit` and an image label. |
+| `org.freedesktop.Sdk//26.08` | `RUNTIME_COMMIT` (2026-10-26) | The runtime VSCodium's manifest names (`runtime=org.freedesktop.Sdk/x86_64/26.08`); 659 MB to download, 1.8 GB installed, which is most of the image. Recorded in `/etc/ci-flatpak/runtime-commit`. |
+
+How the commits are installed (`images/flatpak-install.sh`): Flatpak installs the
+ref as Flathub has it now, `flatpak update --commit` moves it to the pinned commit
+(Flathub keeps the history of a ref, so this is a downgrade the day a newer build
+exists), and `ostree prune` drops the objects only the newer build had. ostree's
+own `pull REF@COMMIT` would fetch it directly, but Flathub's CDN answers HTTP 403
+to the `ostree` client's user agent (`libostree/...`) and lets flatpak's through.
+No dependencies and no related refs are installed: no GL, locale or codec
+extensions, because nothing opens a window.
+
+To bump them, find the commits:
+
+```sh
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak remote-info --user flathub com.vscodium.codium                      # Commit:
+flatpak remote-info --user flathub runtime/org.freedesktop.Sdk/x86_64/26.08  # Commit: (the runtime the app names)
+```
+
+and change `VSCODIUM_COMMIT` and `RUNTIME_COMMIT` (and `RUNTIME_REF` when the app
+moves to a new runtime branch) in the Dockerfile. `flatpak remote-info --log`
+lists the older commits of a ref. The smoke test fails if the app lost
+`--filesystem=host` or `--talk-name=org.freedesktop.Flatpak`, the two permissions
+comline-vscode's host mode relies on.
+
+Why root and `--privileged`: a job container runs as root with the runner's
+workspace mounted, and Flatpak needs no helper process as root. bubblewrap
+creates namespaces and mounts a fresh `/proc` in the sandbox, which Docker's
+default seccomp profile and masked `/proc` paths refuse, so the container is
+started with `--privileged`. `images/flatpak-sandbox-check.sh` proves the whole
+chain in the image's own build: Electron as Node in the sandbox, and the sandbox
+starting a program on the "host" (the container) through `flatpak-spawn --host`.
 
 Not in any image: Node (GitHub mounts its own into a job container for
 actions; a job that runs `node` in a step uses `actions/setup-node`), curl and
@@ -116,5 +158,6 @@ publish run prints the registry's own figure.
 | `ci-fuzz` | 402.6 MB | 1115 MB | 359.0 MB | 1020 MB |
 | `ci-wasm` | 442.5 MB | 1253 MB | 400.1 MB | 1161 MB |
 | `ci-tools` | 467.5 MB | 1354 MB | 402.3 MB | 1183 MB |
+| `ci-flatpak` | 941 MB (pull request #8) | 2571 MB | none | none |
 
 (For comparison, the ci-rust image was about 2.9 GB uncompressed on amd64.)

@@ -6,10 +6,11 @@
 #   fuzz   Rust nightly, cargo-fuzz, gh
 #   wasm   Rust stable + wasm32 (browser and WASI), wasm-bindgen, wasm-pack, binaryen
 #   tools  Rust stable + musl, cue, cbindgen, musl-tools, make, jq
+#   flatpak  Flatpak, bubblewrap, a session bus, and Flathub's VSCodium (amd64 only)
 #
 #   docker build --target bench images
 #
-# All four start from the `base` stage: Debian 13 (trixie) slim, by digest, with
+# All start from the `base` stage: Debian 13 (trixie) slim, by digest, with
 # apt pointed at a dated snapshot of the archive. images/versions.md says what
 # each version is for. Every downloaded binary is checked against the SHA-256
 # hash below, per architecture, before it is used; a version bump changes the
@@ -48,6 +49,15 @@ ARG IAI_CALLGRIND_RUNNER_SHA256_ARM64=046c854014745a7d26ecc58cd8b8ca99ef39d856a3
 ARG GH_VERSION=2.103.3
 ARG GH_SHA256_AMD64=4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d
 ARG GH_SHA256_ARM64=ee32df2323c8847f5fac6cb6b4b69ca75828e9329a8f22f677021f7b3306ce63
+
+# The flatpak image: Flathub's VSCodium and its runtime, by exact commit (the
+# Flathub history keeps them). Bump together, in step with what the consumers'
+# e2e should run on: images/versions.md says how to find the commits.
+ARG FLATHUB_REPO_SHA256=3371dd250e61d9e1633630073fefda153cd4426f72f4afa0c3373ae2e8fea03a
+ARG VSCODIUM_REF=app/com.vscodium.codium/x86_64/stable
+ARG VSCODIUM_COMMIT=b63788f25cee55b738d5aa6df3b864c237bda087ce0ee43e803e5a7b207a25ab
+ARG RUNTIME_REF=runtime/org.freedesktop.Sdk/x86_64/26.08
+ARG RUNTIME_COMMIT=a1b744b072d9f55d061e35382547ae80dad8d92abecc1da7dc1818de2daabfd3
 
 # Built from source (no prebuilt binary for both architectures), --locked.
 ARG CARGO_FUZZ_VERSION=0.13.2
@@ -158,6 +168,13 @@ RUN --mount=type=bind,source=fetch.sh,target=/fetch.sh \
     chmod 755 /out/*
 
 
+FROM dl-base AS dl-flathub
+ARG FLATHUB_REPO_SHA256
+RUN --mount=type=bind,source=fetch.sh,target=/fetch.sh \
+    set -eu; mkdir -p /out; \
+    sh /fetch.sh "https://dl.flathub.org/repo/flathub.flatpakrepo" "$FLATHUB_REPO_SHA256" /out/flathub.flatpakrepo
+
+
 # ---------------------------------------------------------------------------
 # rust-base: base plus a C toolchain (rustc links with cc, build scripts and
 # cargo-fuzz's libFuzzer build need it). The toolchain itself is installed per
@@ -265,3 +282,43 @@ COPY --from=dl-cue /out/ /usr/local/bin/
 ENV CI_RUST_STABLE=${RUST_STABLE}
 LABEL org.opencontainers.image.source="https://github.com/ComlineProject/ci-images" \
       org.opencontainers.image.description="ComlineProject CI: Rust stable with musl, cue and cbindgen (see images/versions.md)"
+
+
+# ---------------------------------------------------------------------------
+# flatpak: the sandbox tests of the VSCodium extension (comline-vscode). Flatpak
+# with bubblewrap and xdg-dbus-proxy, a session bus (`dbus-run-session`), procps
+# (`pgrep`, which the tests use on the "host"), and Flathub's com.vscodium.codium
+# with its runtime as a system installation, at the commits above. Flathub's
+# VSCodium is x86_64, so this image is amd64 only.
+#
+# Run its container with `--privileged`: bubblewrap needs to create namespaces
+# and mount /proc, which Docker's default seccomp and masked paths forbid.
+# Root is the default user, as for every job container: the workspace is
+# mounted from the runner, and flatpak runs as root without a helper.
+#
+#   dbus-run-session -- flatpak run --command=/app/share/codium/com.vscodium.codium \
+#     --env=ELECTRON_RUN_AS_NODE=1 com.vscodium.codium script.js
+FROM base AS flatpak
+ARG TARGETARCH
+ARG VSCODIUM_REF
+ARG VSCODIUM_COMMIT
+ARG RUNTIME_REF
+ARG RUNTIME_COMMIT
+# ostree: to prune what the pinned commits leave behind.
+# The machine id apt's postinst writes differs in every build, so it is removed:
+# the first dbus-daemon that needs one makes it.
+RUN --mount=type=bind,source=apt-install.sh,target=/apt-install.sh \
+    set -eu; [ "$TARGETARCH" = amd64 ] || { echo "ci-flatpak is amd64 only" >&2; exit 1; }; \
+    sh /apt-install.sh flatpak bubblewrap xdg-dbus-proxy dbus-daemon procps ostree; \
+    rm -f /etc/machine-id /var/lib/dbus/machine-id
+RUN --mount=type=bind,from=dl-flathub,source=/out,target=/dl \
+    --mount=type=bind,source=flatpak-install.sh,target=/flatpak-install.sh \
+    sh /flatpak-install.sh
+# flatpak wants a runtime directory, which a container has no login session to
+# make.
+RUN mkdir -p /run/user/0 && chmod 700 /run/user/0
+ENV XDG_RUNTIME_DIR=/run/user/0
+LABEL org.opencontainers.image.source="https://github.com/ComlineProject/ci-images" \
+      org.opencontainers.image.description="ComlineProject CI: Flatpak, bubblewrap, a session bus and Flathub's VSCodium, for the sandbox tests (see images/versions.md)" \
+      org.comlineproject.ci-flatpak.vscodium-commit="${VSCODIUM_COMMIT}" \
+      org.comlineproject.ci-flatpak.runtime-commit="${RUNTIME_COMMIT}"

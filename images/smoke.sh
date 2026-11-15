@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Smoke test for the CI images: run inside one, with no network. Prints each
 # tool's version and fails if one is missing or does not work.
-#   docker run --rm --network none -v "$PWD/images/smoke.sh:/smoke.sh:ro" IMAGE bash /smoke.sh bench|fuzz|wasm|tools
+#   docker run --rm --network none -v "$PWD/images/smoke.sh:/smoke.sh:ro" IMAGE bash /smoke.sh bench|fuzz|wasm|tools|flatpak
 set -euo pipefail
 
-mode=${1:?usage: smoke.sh bench|fuzz|wasm|tools}
+mode=${1:?usage: smoke.sh bench|fuzz|wasm|tools|flatpak}
 host=$(uname -m)-unknown-linux-gnu
 musl=$(uname -m)-unknown-linux-musl
 
@@ -28,13 +28,16 @@ builds() {
 echo "== Base"
 run git --version
 run zstd --version
-run cc --version
 test -s /etc/ssl/certs/ca-certificates.crt || fail "no CA certificates"
 # The apt sources are the dated snapshot, not today's archive.
 grep -q '^URIs: mirror+file:' /etc/apt/sources.list.d/debian.sources || fail "apt is not pointed at the snapshot"
 grep -q 'snapshot.debian.org/archive/debian/[0-9]\{8\}T[0-9]\{6\}Z/' /etc/apt/mirrors/debian.txt || fail "no snapshot date in the apt mirrors"
 cat /etc/apt/mirrors/debian.txt
-run rustup show
+# The Rust images have a C toolchain and rustup; the flatpak image has neither.
+if [[ "$mode" != flatpak ]]; then
+  run cc --version
+  run rustup show
+fi
 
 case "$mode" in
 bench)
@@ -98,6 +101,29 @@ tools)
   run jq --version
   absent valgrind cargo-fuzz wasm-pack gh
   builds "" "$musl"
+  ;;
+flatpak)
+  echo "== flatpak"
+  run flatpak --version
+  run bwrap --version
+  run xdg-dbus-proxy --version
+  run dbus-run-session --version
+  run pgrep --version
+  # The app and its runtime are the commits the image says it has, as any uid.
+  app=$(cat /etc/ci-flatpak/vscodium-commit)
+  runtime=$(cat /etc/ci-flatpak/runtime-commit)
+  [[ "$(flatpak info --system --show-commit com.vscodium.codium)" == "$app" ]] || fail "installed VSCodium is not $app"
+  installed_runtime=$(flatpak info --system --show-commit org.freedesktop.Sdk)
+  [[ "$installed_runtime" == "$runtime" ]] || fail "installed runtime is $installed_runtime, not $runtime"
+  run flatpak list --system --columns=ref,active,origin,installation
+  # The two permissions the extension's host mode relies on, as the installed
+  # app has them: if Flathub's build of a pinned commit lost either, it shows here.
+  permissions=$(flatpak info --system --show-permissions com.vscodium.codium)
+  grep -E '^filesystems=.*\bhost\b' <<< "$permissions" || fail "VSCodium has no --filesystem=host"
+  grep -E '^org\.freedesktop\.Flatpak=talk' <<< "$permissions" || fail "VSCodium cannot talk to org.freedesktop.Flatpak"
+  test -x /var/lib/flatpak/app/com.vscodium.codium/x86_64/stable/active/files/share/codium/com.vscodium.codium || fail "no Electron binary in the app"
+  absent rustc cargo gh node python3 curl
+  # The sandbox itself needs `docker run --privileged`: images/flatpak-sandbox-check.sh.
   ;;
 *)
   fail "unknown mode: $mode"

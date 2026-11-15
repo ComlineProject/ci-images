@@ -1,11 +1,13 @@
 name: build
 
-# Four images (bench, fuzz, wasm, tools: images/Dockerfile, one target each),
-# each for both architectures. Pull requests build and smoke-test them and run
-# core's bench in ci-bench; they never push. Pushes to main and manual runs on
-# main also publish ghcr.io/comlineproject/ci-{bench,fuzz,wasm,tools}, with a
-# build provenance attestation, and then run core's bench in the published
-# ci-bench as a real `container:` job.
+# Five images (bench, fuzz, wasm, tools, flatpak: images/Dockerfile, one target
+# each), each for both architectures except ci-flatpak (amd64 only: Flathub's
+# VSCodium). Pull requests build and smoke-test them, run core's bench in
+# ci-bench and the sandbox check in ci-flatpak; they never push. Pushes to main
+# and manual runs on main also publish
+# ghcr.io/comlineproject/ci-{bench,fuzz,wasm,tools,flatpak}, with a build
+# provenance attestation, and then run core's bench in the published ci-bench
+# and the sandbox check in the published ci-flatpak as real `container:` jobs.
 #
 # The images are reproducible: the same inputs give the same digest (the
 # "Reproducible builds" section of images/versions.md). A pull request proves it
@@ -47,8 +49,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [bench, fuzz, wasm, tools]
+        image: [bench, fuzz, wasm, tools, flatpak]
         arch: [amd64, arm64]
+        exclude:
+          # Flathub's VSCodium is built here for x86_64 only.
+          - image: flatpak
+            arch: arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -73,6 +79,11 @@ jobs:
         run: docker run --rm --network none -v "$PWD/images/smoke.sh:/smoke.sh:ro" ci-${{ matrix.image }}:test bash /smoke.sh ${{ matrix.image }}
       - name: Smoke test (uid 1001)
         run: docker run --rm --network none --user 1001:1001 -e HOME=/tmp -v "$PWD/images/smoke.sh:/smoke.sh:ro" ci-${{ matrix.image }}:test bash /smoke.sh ${{ matrix.image }}
+      # Flatpak's sandbox needs more than the smoke test's container gives:
+      # `--privileged`, which is also what a job's `container:` options say.
+      - name: Sandbox check (privileged)
+        if: matrix.image == 'flatpak'
+        run: docker run --rm --privileged --network none -v "$PWD/images/flatpak-sandbox-check.sh:/check.sh:ro" ci-flatpak:test bash /check.sh
       # The same image again as an OCI archive (from the build cache, so it is
       # quick): the layers' sizes there are what a pull transfers, and its
       # manifest digest is what the registry will hold.
@@ -170,8 +181,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [bench, fuzz, wasm, tools]
+        image: [bench, fuzz, wasm, tools, flatpak]
         arch: [amd64, arm64]
+        exclude:
+          # Flathub's VSCodium is built here for x86_64 only.
+          - image: flatpak
+            arch: arm64
     env:
       IMAGE: ghcr.io/comlineproject/ci-${{ matrix.image }}
     steps:
@@ -206,6 +221,11 @@ jobs:
         run: |
           docker pull "$IMAGE@$DIGEST"
           docker run --rm --network none -v "$PWD/images/smoke.sh:/smoke.sh:ro" "$IMAGE@$DIGEST" bash /smoke.sh ${{ matrix.image }}
+      - name: Sandbox check the pushed image (privileged)
+        if: matrix.image == 'flatpak'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: docker run --rm --privileged --network none -v "$PWD/images/flatpak-sandbox-check.sh:/check.sh:ro" "$IMAGE@$DIGEST" bash /check.sh
       - name: Record the digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -236,7 +256,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [bench, fuzz, wasm, tools]
+        image: [bench, fuzz, wasm, tools, flatpak]
     env:
       IMAGE: ghcr.io/comlineproject/ci-${{ matrix.image }}
     steps:
@@ -370,3 +390,27 @@ jobs:
       - name: Bench
         working-directory: core-src
         run: sh "$GITHUB_WORKSPACE/images/bench-check.sh"
+
+  # The published ci-flatpak as a real `container:` job: the way a consuming
+  # repository runs its sandbox tests. --privileged, because bubblewrap makes
+  # namespaces and mounts /proc.
+  flatpak-container:
+    name: sandbox in the published ci-flatpak
+    needs: merge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/comlineproject/ci-flatpak:sha-${{ github.sha }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --privileged
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sandbox check
+        run: bash images/flatpak-sandbox-check.sh
