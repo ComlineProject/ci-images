@@ -13,10 +13,12 @@ One image per kind of job, each carrying only what those jobs use:
 | `ghcr.io/comlineproject/ci-fuzz` | the cargo-fuzz jobs | Rust nightly, cargo-fuzz, gh |
 | `ghcr.io/comlineproject/ci-wasm` | the WebAssembly build | Rust stable with wasm32, wasm-bindgen, wasm-pack, binaryen |
 | `ghcr.io/comlineproject/ci-tools` | cue, cbindgen and the musl build | Rust stable with musl, cue, cbindgen, musl-tools, make, jq |
+| `ghcr.io/comlineproject/ci-flatpak` | the sandbox tests of the VSCodium extension | Flatpak, bubblewrap, xdg-dbus-proxy, a session bus, Flathub's VSCodium and its runtime (amd64 only) |
 
 All are Debian 13 (trixie) slim, by digest, with every apt package pinned to
-one snapshot.debian.org date, for `linux/amd64` and `linux/arm64`. They all
-have git and a C toolchain. [`images/versions.md`](images/versions.md) lists
+one snapshot.debian.org date, for `linux/amd64` and `linux/arm64` (`ci-flatpak`:
+`linux/amd64` only, as Flathub's VSCodium is built for x86_64 here). The four
+Rust images have git and a C toolchain; `ci-flatpak` has git and no compiler. [`images/versions.md`](images/versions.md) lists
 every version and why it is that one; [`docs/base-choice.md`](docs/base-choice.md)
 says why Debian.
 
@@ -48,6 +50,20 @@ default seccomp profile refuses.
       options: --security-opt seccomp=unconfined
 ```
 
+The flatpak job's container needs `--privileged`: bubblewrap makes namespaces
+and mounts `/proc`, which Docker's default seccomp profile and masked paths
+refuse. It runs as root, as every job container does, with `XDG_RUNTIME_DIR`
+(`/run/user/0`) set; the job's `dbus-run-session -- flatpak run ...` is its own
+session bus. VSCodium is installed for the whole system at an exact Flathub
+commit, which `/etc/ci-flatpak/vscodium-commit` (and the image's
+`org.comlineproject.ci-flatpak.vscodium-commit` label) holds, so a job can log it.
+
+```yaml
+    container:
+      image: ghcr.io/comlineproject/ci-flatpak@sha256:<digest>
+      options: --privileged
+```
+
 Renovate bumps the digest: the tags (`latest`, `sha-<short>`) exist for it to
 follow. A bump is a pull request in the consuming repository, so it runs that
 repository's CI against the new image before it merges.
@@ -77,18 +93,23 @@ gh attestation verify oci://ghcr.io/comlineproject/ci-bench@sha256:<digest> --ow
 
 [`images/Dockerfile`](images/Dockerfile) is one file with a `base` stage and a
 build target per image (`docker build --target bench images`).
-[`build.yml`](.github/workflows/build.yml) builds the four images for both
-architectures natively (`ubuntu-24.04` and `ubuntu-24.04-arm`). Every build
+[`build.yml`](.github/workflows/build.yml) builds the five images for both
+architectures natively (`ubuntu-24.04` and `ubuntu-24.04-arm`; `ci-flatpak`
+only on the first). Every build
 smoke-tests the image ([`images/smoke.sh`](images/smoke.sh), one mode per image:
 each tool's version, a build for each target, with no network, as root and as
-another uid), prints its compressed size, and `ci-bench` runs core's bench at a
-fixed commit. Pull requests stop there. Pushes to `main` and manual runs on
+another uid), prints its compressed size, `ci-bench` runs core's bench at a
+fixed commit, and `ci-flatpak` runs VSCodium's Electron inside Flatpak's
+sandbox in a `--privileged` container ([`images/flatpak-sandbox-check.sh`](images/flatpak-sandbox-check.sh)). Pull requests stop there. Pushes to `main` and manual runs on
 `main` push each architecture by digest, smoke-test what was pushed, join the
 two into one manifest tagged `sha-<short>` and `latest`, attest it, and run
-core's bench in the published `ci-bench` as a real `container:` job.
+core's bench in the published `ci-bench` and the sandbox check in the published
+`ci-flatpak` as real `container:` jobs.
 
 There is no scheduled rebuild: the apt packages are fixed by date, so a rebuild
 would change nothing. To update them, move `DEBIAN_SNAPSHOT` (and the base
 digest) in the Dockerfile. To update a tool, change the `ARG` and its hashes in
 [`images/Dockerfile`](images/Dockerfile), and its row in
-[`images/versions.md`](images/versions.md).
+[`images/versions.md`](images/versions.md). `ci-flatpak`'s VSCodium and runtime
+are bumped the same way, by commit ([`images/versions.md`](images/versions.md#flatpak)
+says how to find them).
