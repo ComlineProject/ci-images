@@ -26,9 +26,11 @@ flatpak remote-add --system flathub /dl/flathub.flatpakrepo
 
 install_pinned() {
   ref=$1 commit=$2
-  flatpak install --system --noninteractive --assumeyes --no-deps --no-related flathub "$ref"
-  flatpak update --system --noninteractive --assumeyes --no-deps --no-related --commit="$commit" "$ref"
-  have=$(flatpak info --system --show-commit "$ref")
+  # NAME/ARCH/BRANCH, which every flatpak command takes.
+  name=${ref#*/}
+  flatpak install --system --noninteractive --assumeyes --no-deps --no-related flathub "$name"
+  flatpak update --system --noninteractive --assumeyes --no-deps --no-related --commit="$commit" "$name"
+  have=$(flatpak info --system --show-commit "$name")
   [ "$have" = "$commit" ] || { echo "installed $ref is $have, not $commit" >&2; exit 1; }
 }
 install_pinned "$RUNTIME_REF" "$RUNTIME_COMMIT"
