@@ -113,9 +113,9 @@ flatpak)
   app=$(cat /etc/ci-flatpak/vscodium-commit)
   runtime=$(cat /etc/ci-flatpak/runtime-commit)
   [[ "$(flatpak info --system --show-commit com.vscodium.codium)" == "$app" ]] || fail "installed VSCodium is not $app"
-  installed_runtime=$(flatpak list --system --runtime --columns=application,commit | awk '$1 == "org.freedesktop.Sdk" { print $2 }')
-  [[ "$installed_runtime" == "$runtime"* ]] || fail "installed runtime is $installed_runtime, not $runtime"
-  run flatpak list --system --columns=ref,commit,installation
+  installed_runtime=$(flatpak info --system --show-commit org.freedesktop.Sdk)
+  [[ "$installed_runtime" == "$runtime" ]] || fail "installed runtime is $installed_runtime, not $runtime"
+  run flatpak list --system --columns=ref,active,origin,installation
   # The two permissions the extension's host mode relies on, as the installed
   # app has them: if Flathub's build of a pinned commit lost either, it shows here.
   permissions=$(flatpak info --system --show-permissions com.vscodium.codium)

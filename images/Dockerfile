@@ -57,7 +57,7 @@ ARG FLATHUB_REPO_SHA256=3371dd250e61d9e1633630073fefda153cd4426f72f4afa0c3373ae2
 ARG VSCODIUM_REF=app/com.vscodium.codium/x86_64/stable
 ARG VSCODIUM_COMMIT=b63788f25cee55b738d5aa6df3b864c237bda087ce0ee43e803e5a7b207a25ab
 ARG RUNTIME_REF=runtime/org.freedesktop.Sdk/x86_64/26.08
-ARG RUNTIME_COMMIT=a1b744b072d9f55d061e35382547ae80dad8d92abecc1da7dc1818de2daabfd3
+ARG RUNTIME_COMMIT=3311c13c67b602315c39cf5310de129dd3460d04b6c8cf5be1b2cbc42c51abd7
 
 # Built from source (no prebuilt binary for both architectures), --locked.
 ARG CARGO_FUZZ_VERSION=0.13.2

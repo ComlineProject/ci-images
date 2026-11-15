@@ -40,7 +40,7 @@ install_pinned "$VSCODIUM_REF" "$VSCODIUM_COMMIT"
 ostree --repo="$repo" prune --refs-only --depth=0
 ostree --repo="$repo" refs
 
-flatpak list --system --columns=ref,commit,installation
+flatpak list --system --columns=ref,active,origin,installation
 
 # What a job logs, and what the smoke test compares to the labels.
 mkdir -p /etc/ci-flatpak
